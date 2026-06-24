@@ -1,0 +1,8 @@
+build/
+fixtures/
+out/
+live_4.3.4_out/
+*.user
+.superpowers/
+vcpkg_installed/
+test_tmp.mpq
