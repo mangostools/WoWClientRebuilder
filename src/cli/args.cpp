@@ -92,8 +92,14 @@ bool parse_args(int argc, char** argv, RunParams& out, std::string& err)
     for (int i = 1; i < argc; ++i)
     {
         std::string a = argv[i];
-        if (a == "--cinematics")
+        if (a == "--no-cinematics")
         {
+            out.cinematics = false;
+        }
+        else if (a == "--cinematics")
+        {
+            // Per-locale cinematics are included by default now, so this flag is
+            // redundant; kept accepted so older invocations don't error out.
             out.cinematics = true;
         }
         else if (a == "--yes")

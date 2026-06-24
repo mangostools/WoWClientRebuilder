@@ -163,7 +163,7 @@ std::string prompt_line(std::istream& in, std::ostream& out,
 Mode prompt_mode(std::istream& in, std::ostream& out)
 {
     int idx = prompt_menu(in, out, "Generation mode:",
-                          {"Full client (entire client + Data/, incl. shared "
+                          {"Full client (entire client + Data/ + your locale's "
                            "cinematics)",
                            "Data only", "Locale(s) only"});
     if (idx == 1)

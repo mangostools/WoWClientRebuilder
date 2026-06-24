@@ -47,8 +47,10 @@ enum class Mode
 /// Map a manifest into PlainUrl Artifacts filtered by mode and locales.
 /// Each surviving MfilRecord becomes an Artifact with outName == relPath,
 /// url == m.dataBaseUrl + relPath, the record size and locale, and optional
-/// set true when relPath contains "/Interface/Cinematics/".  When cinematics
-/// is false, cinematics records are dropped entirely.
+/// set true when relPath contains "/Interface/Cinematics/".  cinematics gates
+/// only the per-locale Data/<locale>/Interface/Cinematics/ intros: when false
+/// (--no-cinematics) they are dropped; the shared Data/Interface/Cinematics/
+/// movies are always kept regardless.
 std::vector<Artifact> expand_data(const Manifest& m,
                                   const std::vector<std::string>& locales,
                                   Mode mode, bool cinematics);

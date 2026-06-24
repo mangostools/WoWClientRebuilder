@@ -232,7 +232,7 @@ TEST_CASE("run_interactive: full client / single locale / EU")
     CHECK(p.locales[0] == "enUS");
     CHECK(p.region == "EU");
     CHECK(p.outDir == "WoW-4.3.4-15595-enUS");
-    CHECK(p.cinematics == false);
+    CHECK(p.cinematics == true); // interactive always includes the cinematics
     CHECK(p.realmlist == "127.0.0.1");
     // Proves the output-folder prompt actually ran (empty-input -> default),
     // rather than short-circuiting on EOF.

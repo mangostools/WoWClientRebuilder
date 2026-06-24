@@ -61,7 +61,8 @@ static void print_usage()
            " (loads each file into RAM)\n");
     printf("  --realmlist H host written into the WTF files (default 127.0.0.1)\n");
     printf("  --region R   EU | NA (default EU)\n");
-    printf("  --cinematics include cinematics movie files\n");
+    printf("  --no-cinematics skip the per-locale cinematic movies"
+           " (included by default)\n");
     printf("  --yes        skip pre-flight confirmation prompt\n");
 }
 

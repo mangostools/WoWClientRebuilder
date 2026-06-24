@@ -131,7 +131,7 @@ wowrebuild <mode> <version> [options] <outDir>
   version:      4.3.4 | 5.4.8
   --locale L    csv list (e.g. enUS,deDE) or 'all'   (default enUS)
   --region R    EU | NA                               (default EU)
-  --cinematics  include the optional per-locale cinematic movie files
+  --no-cinematics skip the per-locale cinematic movies (included by default)
   --realmlist H host written into the WTF files       (default 127.0.0.1)
   --yes         skip the pre-flight confirmation prompt
   --tfil path   optional .tfil torrent for piece verification

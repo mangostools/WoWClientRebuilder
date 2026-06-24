@@ -51,7 +51,7 @@ TEST_CASE("parse_args reads positionals and applies flag defaults")
     CHECK(p.tfilPath.empty());
     CHECK(p.realmlist == "127.0.0.1");
     CHECK(p.region == "EU");
-    CHECK(p.cinematics == false);
+    CHECK(p.cinematics == true); // included by default; --no-cinematics opts out
 }
 
 TEST_CASE("parse_args handles every flag and a csv --locale")
@@ -64,7 +64,7 @@ TEST_CASE("parse_args handles every flag and a csv --locale")
          "--tfil", "C:/in.tfil",
          "--realmlist", "logon.example.org",
          "--region", "NA",
-         "--cinematics",
+         "--no-cinematics",
          "C:/out"},
         p, err);
     REQUIRE(ok);
@@ -77,6 +77,17 @@ TEST_CASE("parse_args handles every flag and a csv --locale")
     CHECK(p.tfilPath == "C:/in.tfil");
     CHECK(p.realmlist == "logon.example.org");
     CHECK(p.region == "NA");
+    CHECK(p.cinematics == false); // --no-cinematics opts out of the intros
+}
+
+TEST_CASE("parse_args still accepts the legacy --cinematics flag (no-op)")
+{
+    RunParams p;
+    std::string err;
+    bool ok = run_parse(
+        {"wowrebuild", "client", "4.3.4", "--cinematics", "C:/out"}, p, err);
+    REQUIRE(ok);
+    // Cinematics are on by default; the legacy flag is accepted and harmless.
     CHECK(p.cinematics == true);
 }
 

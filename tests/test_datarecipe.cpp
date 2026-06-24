@@ -239,7 +239,7 @@ TEST_CASE("parse_mfil: shared Data/Interface/ assets are forced locale-independe
     CHECK(loc("Data/enUS/Interface/Cinematics/WOW_Intro_800.avi") == "enUS");
 }
 
-TEST_CASE("expand_data: shared cinematics always in, per-locale gated by --cinematics")
+TEST_CASE("expand_data: shared cinematics always in, per-locale on by default, off with --no-cinematics")
 {
     const std::string mfil =
         "version=2\n"
@@ -258,18 +258,19 @@ TEST_CASE("expand_data: shared cinematics always in, per-locale gated by --cinem
         for (const auto& a : arts) { if (a.outName == name) { return true; } }
         return false;
     };
-    // Default (cinematics OFF): shared movie in, all per-locale movies out.
-    std::vector<wcr::Artifact> def =
+    // cinematics OFF (--no-cinematics): shared movie in, all per-locale out.
+    std::vector<wcr::Artifact> off =
         wcr::expand_data(m, {"enUS"}, wcr::Mode::FullClient, false);
-    CHECK(has(def, "Data/Interface/Cinematics/WoW3X_Intro_1280.avi"));
-    CHECK_FALSE(has(def, "Data/enUS/Interface/Cinematics/WOW_Intro_800.avi"));
-    CHECK_FALSE(has(def, "Data/deDE/Interface/Cinematics/WOW_Intro_800.avi"));
-    // --cinematics ON: the selected locale's per-locale cinematics also come in.
-    std::vector<wcr::Artifact> cin =
+    CHECK(has(off, "Data/Interface/Cinematics/WoW3X_Intro_1280.avi"));
+    CHECK_FALSE(has(off, "Data/enUS/Interface/Cinematics/WOW_Intro_800.avi"));
+    CHECK_FALSE(has(off, "Data/deDE/Interface/Cinematics/WOW_Intro_800.avi"));
+    // cinematics ON (the default): the selected locale's (enUS) per-locale
+    // cinematics also come in; a non-selected locale's (deDE) stay out.
+    std::vector<wcr::Artifact> on =
         wcr::expand_data(m, {"enUS"}, wcr::Mode::FullClient, true);
-    CHECK(has(cin, "Data/Interface/Cinematics/WoW3X_Intro_1280.avi"));
-    CHECK(has(cin, "Data/enUS/Interface/Cinematics/WOW_Intro_800.avi"));
-    CHECK_FALSE(has(cin, "Data/deDE/Interface/Cinematics/WOW_Intro_800.avi"));
+    CHECK(has(on, "Data/Interface/Cinematics/WoW3X_Intro_1280.avi"));
+    CHECK(has(on, "Data/enUS/Interface/Cinematics/WOW_Intro_800.avi"));
+    CHECK_FALSE(has(on, "Data/deDE/Interface/Cinematics/WOW_Intro_800.avi"));
 }
 
 TEST_CASE("free_space reports available bytes and supports pre-flight check")

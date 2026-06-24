@@ -186,9 +186,10 @@ std::vector<Artifact> expand_data(const Manifest& m,
         }
 
         // The shared Data/Interface/Cinematics/ movies are locale-independent
-        // (isBase) and ship with every complete client, so the --cinematics
-        // opt-out only gates the per-locale Data/<locale>/Interface/Cinematics/
-        // legacy intros.
+        // (isBase) and ship with every complete client, so they are always kept.
+        // The per-locale Data/<locale>/Interface/Cinematics/ intros are included
+        // by default (a complete client has them); --no-cinematics (cinematics ==
+        // false) is the opt-out that drops them to shrink the download.
         const bool isCine = is_cinematics_path(rec.relPath);
         if (isCine && !isBase && !cinematics)
         {
