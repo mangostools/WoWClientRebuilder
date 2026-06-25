@@ -161,6 +161,15 @@ int main(int argc, char** argv)
             pause_if_interactive(interactive);
             return 1;
         }
+        // The user chose Exit at one of the setup prompts: stop cleanly before
+        // touching any journal, pre-flight, or download state.
+        if (params.cancelled)
+        {
+            printf("Cancelled.\n");
+            curl_global_cleanup();
+            pause_if_interactive(interactive);
+            return 0;
+        }
         // Resume: a previous journal auto-resumes (already-downloaded files are
         // skipped) UNLESS the user explicitly asks to start fresh. The
         // destructive clear requires an explicit yes, so EOF/Enter keep it.

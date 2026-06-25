@@ -123,6 +123,10 @@ mode → version → locale (skipped for `data`) → CDN region → output folde
 resume-or-fresh-start (if a prior download exists) → pre-flight confirmation. This is
 what runs when you double-click the exe.
 
+At each of the five setup questions you can enter **`B`** to step back to the previous
+question or **`X`** to exit (with a confirmation). Exiting stops cleanly before anything
+is downloaded.
+
 ### Scripted (flags)
 
 ```

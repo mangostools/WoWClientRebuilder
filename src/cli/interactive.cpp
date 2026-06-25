@@ -96,8 +96,9 @@ const VersionInfo kVersions[] = {
 
 namespace wcr
 {
-int prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
-                const std::vector<std::string>& options)
+Nav prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
+                const std::vector<std::string>& options, bool allowBack,
+                int& index)
 {
     while (true)
     {
@@ -106,20 +107,36 @@ int prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
         {
             out << "  [" << (i + 1) << "] " << options[i] << "\n";
         }
-        out << "Select [1-" << options.size() << "]: ";
+        if (allowBack)
+        {
+            out << "  [B] Back\n";
+        }
+        out << "  [X] Exit\n";
+        out << "Select [1-" << options.size()
+            << (allowBack ? ", B, X" : ", X") << "]: ";
         std::string line;
         if (!std::getline(in, line))
         {
-            return -1;
+            return Nav::Exit;
+        }
+        std::string s = to_lower(trim(line));
+        if (s == "x")
+        {
+            return Nav::Exit;
+        }
+        if (allowBack && s == "b")
+        {
+            return Nav::Back;
         }
         int n = 0;
-        if (parse_int(trim(line), n) && n >= 1 &&
+        if (parse_int(s, n) && n >= 1 &&
             n <= static_cast<int>(options.size()))
         {
-            return n - 1;
+            index = n - 1;
+            return Nav::Select;
         }
         out << "Please enter a number between 1 and " << options.size()
-            << ".\n";
+            << (allowBack ? ", B, or X.\n" : ", or X.\n");
     }
 }
 
@@ -147,57 +164,94 @@ bool prompt_yes_no(std::istream& in, std::ostream& out,
     }
 }
 
-std::string prompt_line(std::istream& in, std::ostream& out,
-                        const std::string& prompt, const std::string& deflt)
+Nav prompt_outdir(std::istream& in, std::ostream& out, const std::string& deflt,
+                  bool allowBack, std::string& out_path)
 {
-    out << prompt << " [" << deflt << "]: ";
+    out << "Output folder [" << deflt << "] ("
+        << (allowBack ? "B=back, " : "") << "X=exit): ";
     std::string line;
     if (!std::getline(in, line))
     {
-        return deflt;
+        return Nav::Exit;
     }
     std::string s = trim(line);
-    return s.empty() ? deflt : s;
+    if (s.empty())
+    {
+        out_path = deflt;
+        return Nav::Select;
+    }
+    std::string low = to_lower(s);
+    if (low == "x")
+    {
+        return Nav::Exit;
+    }
+    if (allowBack && low == "b")
+    {
+        return Nav::Back;
+    }
+    out_path = s; // a real path keeps its original case
+    return Nav::Select;
 }
 
-Mode prompt_mode(std::istream& in, std::ostream& out)
+Nav prompt_mode(std::istream& in, std::ostream& out, bool allowBack,
+                Mode& out_mode)
 {
-    int idx = prompt_menu(in, out, "Generation mode:",
+    int idx = 0;
+    Nav nav = prompt_menu(in, out, "Generation mode:",
                           {"Full client (entire client + Data/ + your locale's "
                            "cinematics)",
-                           "Data only", "Locale(s) only"});
+                           "Data only", "Locale(s) only"},
+                          allowBack, idx);
+    if (nav != Nav::Select)
+    {
+        return nav;
+    }
     if (idx == 1)
     {
-        return Mode::DataOnly;
+        out_mode = Mode::DataOnly;
     }
-    if (idx == 2)
+    else if (idx == 2)
     {
-        return Mode::LocaleOnly;
+        out_mode = Mode::LocaleOnly;
     }
-    return Mode::FullClient; // idx 0, or -1 on EOF
+    else
+    {
+        out_mode = Mode::FullClient;
+    }
+    return Nav::Select;
 }
 
-std::string prompt_version(std::istream& in, std::ostream& out)
+Nav prompt_version(std::istream& in, std::ostream& out, bool allowBack,
+                   std::string& out_version)
 {
     std::vector<std::string> opts;
     for (const VersionInfo& v : kVersions)
     {
         opts.push_back(std::string(v.version) + " (" + v.build + ")");
     }
-    int idx = prompt_menu(in, out, "Client version:", opts);
-    if (idx < 0)
+    int idx = 0;
+    Nav nav = prompt_menu(in, out, "Client version:", opts, allowBack, idx);
+    if (nav != Nav::Select)
     {
-        idx = 0;
+        return nav;
     }
-    return kVersions[idx].version;
+    out_version = kVersions[idx].version;
+    return Nav::Select;
 }
 
-std::string prompt_region(std::istream& in, std::ostream& out)
+Nav prompt_region(std::istream& in, std::ostream& out, bool allowBack,
+                  std::string& out_region)
 {
-    int idx = prompt_menu(in, out,
+    int idx = 0;
+    Nav nav = prompt_menu(in, out,
                           "CDN region (the other stays automatic failover):",
-                          {"EU", "NA"});
-    return idx == 1 ? "NA" : "EU";
+                          {"EU", "NA"}, allowBack, idx);
+    if (nav != Nav::Select)
+    {
+        return nav;
+    }
+    out_region = (idx == 1) ? "NA" : "EU";
+    return Nav::Select;
 }
 
 std::string build_for_version(const std::string& version)
@@ -212,14 +266,16 @@ std::string build_for_version(const std::string& version)
     return std::string();
 }
 
-std::vector<std::string> prompt_locale(std::istream& in, std::ostream& out,
-                                       const std::vector<std::string>& available)
+Nav prompt_locale(std::istream& in, std::ostream& out,
+                  const std::vector<std::string>& available, bool allowBack,
+                  std::vector<std::string>& out_locales)
 {
-    // No advertised locales (degenerate manifest): nothing to pick, so proceed
-    // with the all-locales sentinel rather than loop forever on a "1-0" range.
+    // No advertised locales (degenerate manifest): nothing to pick, so select
+    // the all-locales sentinel rather than loop forever on a "1-0" range.
     if (available.empty())
     {
-        return {};
+        out_locales = {};
+        return Nav::Select;
     }
     while (true)
     {
@@ -229,24 +285,41 @@ std::vector<std::string> prompt_locale(std::istream& in, std::ostream& out,
             out << "  [" << (i + 1) << "] " << available[i] << "\n";
         }
         out << "  [A] All locales\n";
-        out << "Select [1-" << available.size() << " or A]: ";
+        if (allowBack)
+        {
+            out << "  [B] Back\n";
+        }
+        out << "  [X] Exit\n";
+        out << "Select [1-" << available.size() << ", A"
+            << (allowBack ? ", B, X" : ", X") << "]: ";
         std::string line;
         if (!std::getline(in, line))
         {
-            return {"enUS"};
+            return Nav::Exit;
         }
         std::string s = to_lower(trim(line));
+        if (s == "x")
+        {
+            return Nav::Exit;
+        }
+        if (allowBack && s == "b")
+        {
+            return Nav::Back;
+        }
         if (s == "a" || s == "all")
         {
-            return {};
+            out_locales = {};
+            return Nav::Select;
         }
         int n = 0;
         if (parse_int(s, n) && n >= 1 &&
             n <= static_cast<int>(available.size()))
         {
-            return {available[static_cast<std::size_t>(n) - 1]};
+            out_locales = {available[static_cast<std::size_t>(n) - 1]};
+            return Nav::Select;
         }
-        out << "Please enter a number 1-" << available.size() << " or A.\n";
+        out << "Please enter a number 1-" << available.size() << ", A"
+            << (allowBack ? ", B, or X.\n" : ", or X.\n");
     }
 }
 
@@ -277,25 +350,111 @@ std::string derive_outdir(const std::string& version, const std::string& build,
     return name + "-" + tag;
 }
 
+// Confirm an Exit request (the [X] option) before abandoning setup.
+static bool confirm_exit(std::istream& in, std::ostream& out)
+{
+    return prompt_yes_no(in, out, "Exit without rebuilding?");
+}
+
 RunParams run_interactive(std::istream& in, std::ostream& out,
                           const FetchLocales& fetchLocales)
 {
     RunParams p;
-    p.mode = prompt_mode(in, out);
-    p.version = prompt_version(in, out);
-    if (p.mode == Mode::DataOnly)
+    // Ordered setup questions. Locale is skipped in BOTH directions for
+    // DataOnly, so Region's Back returns to Version.
+    enum Step
     {
-        p.locales = {};
-    }
-    else
+        StepMode = 0,
+        StepVersion,
+        StepLocale,
+        StepRegion,
+        StepOutput,
+        StepDone
+    };
+    auto nextStep = [](int step, Mode mode) -> int
     {
-        std::vector<std::string> avail = fetchLocales(p.version);
-        p.locales = prompt_locale(in, out, avail);
+        int s = step + 1;
+        if (s == StepLocale && mode == Mode::DataOnly)
+        {
+            s = StepRegion;
+        }
+        return s;
+    };
+    auto prevStep = [](int step, Mode mode) -> int
+    {
+        int s = step - 1;
+        if (s == StepLocale && mode == Mode::DataOnly)
+        {
+            s = StepVersion;
+        }
+        return s;
+    };
+
+    int step = StepMode;
+    while (step != StepDone)
+    {
+        const bool allowBack = (step != StepMode); // nowhere to go back from #1
+        Nav nav = Nav::Select;
+        switch (step)
+        {
+            case StepMode:
+            {
+                nav = prompt_mode(in, out, allowBack, p.mode);
+                if (nav == Nav::Select && p.mode == Mode::DataOnly)
+                {
+                    p.locales = {}; // DataOnly carries no locale selection
+                }
+                break;
+            }
+            case StepVersion:
+            {
+                nav = prompt_version(in, out, allowBack, p.version);
+                break;
+            }
+            case StepLocale:
+            {
+                std::vector<std::string> avail = fetchLocales(p.version);
+                nav = prompt_locale(in, out, avail, allowBack, p.locales);
+                break;
+            }
+            case StepRegion:
+            {
+                nav = prompt_region(in, out, allowBack, p.region);
+                break;
+            }
+            case StepOutput:
+            {
+                std::string build = build_for_version(p.version);
+                std::string deflt =
+                    derive_outdir(p.version, build, p.mode, p.locales);
+                nav = prompt_outdir(in, out, deflt, allowBack, p.outDir);
+                break;
+            }
+            default:
+            {
+                break;
+            }
+        }
+
+        if (nav == Nav::Exit)
+        {
+            // A typed 'x' on a live stream gets a confirmation. A closed/
+            // exhausted stream (EOF) cannot answer one, so cancel
+            // unconditionally rather than re-prompting into an infinite loop.
+            if (!in.good() || confirm_exit(in, out))
+            {
+                p.cancelled = true;
+                return p;
+            }
+            continue; // declined: re-show the same question
+        }
+        if (nav == Nav::Back)
+        {
+            step = prevStep(step, p.mode);
+            continue;
+        }
+        step = nextStep(step, p.mode);
     }
-    p.region = prompt_region(in, out);
-    std::string build = build_for_version(p.version);
-    std::string deflt = derive_outdir(p.version, build, p.mode, p.locales);
-    p.outDir = prompt_line(in, out, "Output folder", deflt);
     return p;
 }
 

@@ -43,45 +43,66 @@ namespace wcr
 using FetchLocales =
     std::function<std::vector<std::string>(const std::string& version)>;
 
-/// Print a numbered menu and read a choice. Returns the 0-based index of the
-/// selected option, or -1 on end-of-input. Re-prompts on invalid input.
-int prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
-                const std::vector<std::string>& options);
+/// Outcome of a navigable prompt: the user made a choice, asked to go Back to
+/// the previous question, or asked to Exit. Back is only offered when the
+/// caller passes allowBack (i.e. not on the first question).
+enum class Nav
+{
+    Select, ///< The out-parameter holds the chosen value.
+    Back,   ///< Return to the previous question.
+    Exit    ///< Quit the interactive flow (caller confirms + aborts).
+};
+
+/// Print a numbered menu with [B] Back (when allowBack) and [X] Exit, and read
+/// a choice. On Nav::Select, index is the 0-based option. EOF maps to Exit.
+/// Re-prompts on invalid input.
+Nav prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
+                const std::vector<std::string>& options, bool allowBack,
+                int& index);
 
 /// Ask a yes/no question. Returns true for y/yes, false for n/no or EOF.
 bool prompt_yes_no(std::istream& in, std::ostream& out,
                    const std::string& question);
 
-/// Prompt for a line of text, showing deflt in brackets. Empty input or EOF
-/// returns deflt; otherwise the trimmed input.
-std::string prompt_line(std::istream& in, std::ostream& out,
-                        const std::string& prompt, const std::string& deflt);
+/// Prompt for the output folder, showing deflt in brackets and the B/X hints.
+/// Empty input selects deflt; "b" is Back (when allowBack), "x" is Exit, EOF is
+/// Exit; any other input is taken as the path (original case preserved).
+Nav prompt_outdir(std::istream& in, std::ostream& out, const std::string& deflt,
+                  bool allowBack, std::string& out_path);
 
-/// Ask which generation mode to run.
-Mode prompt_mode(std::istream& in, std::ostream& out);
+/// Ask which generation mode to run. On Nav::Select, out holds the Mode.
+Nav prompt_mode(std::istream& in, std::ostream& out, bool allowBack,
+                Mode& out_mode);
 
-/// Ask which client version to rebuild. Returns a version string ("4.3.4").
-std::string prompt_version(std::istream& in, std::ostream& out);
+/// Ask which client version to rebuild. On Nav::Select, out holds "4.3.4" etc.
+Nav prompt_version(std::istream& in, std::ostream& out, bool allowBack,
+                   std::string& out_version);
 
-/// Ask which CDN region to download from. Returns "EU" or "NA".
-std::string prompt_region(std::istream& in, std::ostream& out);
+/// Ask which CDN region to download from. On Nav::Select, out is "EU" or "NA".
+Nav prompt_region(std::istream& in, std::ostream& out, bool allowBack,
+                  std::string& out_region);
 
 /// The build number paired with a supported version ("4.3.4" -> "15595"), or
 /// "" if the version is unknown. Mirrors find_recipe()'s supported set.
 std::string build_for_version(const std::string& version);
 
-/// Ask which locale(s) to include. Returns {chosen} for a single pick, {} for
-/// "all" (the empty == all sentinel the engine expects), or {"enUS"} on EOF.
-std::vector<std::string> prompt_locale(std::istream& in, std::ostream& out,
-                                       const std::vector<std::string>& available);
+/// Ask which locale(s) to include. On Nav::Select, out is {chosen} for a single
+/// pick or {} for "all" (the empty == all sentinel). An empty advertised list
+/// selects {} without prompting.
+Nav prompt_locale(std::istream& in, std::ostream& out,
+                  const std::vector<std::string>& available, bool allowBack,
+                  std::vector<std::string>& out_locales);
 
 /// Build the default output-folder name: WoW-<version>-<build>[-<localeTag>].
 /// DataOnly omits the locale tag; "all" (empty locales) yields "-all".
 std::string derive_outdir(const std::string& version, const std::string& build,
                           Mode mode, const std::vector<std::string>& locales);
 
-/// Drive the full interactive menu and return a populated RunParams. The
-/// locale list is obtained via fetchLocales(version) (skipped for Data only).
+/// Drive the full interactive menu and return a populated RunParams. The user
+/// can step Back to the previous question or Exit (with a confirmation) at any
+/// of the five setup prompts; an Exit sets RunParams.cancelled so the caller
+/// aborts before downloading. The locale list is obtained via
+/// fetchLocales(version) (skipped, both directions, for Data only).
 RunParams run_interactive(std::istream& in, std::ostream& out,
                           const FetchLocales& fetchLocales);
 

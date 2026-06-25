@@ -49,6 +49,8 @@ struct RunParams
         bool cinematics = true;           ///< Include per-locale cinematics (on
                                           ///< by default; --no-cinematics skips).
         bool yes = false;                 ///< Skip interactive pre-flight prompt.
+        bool cancelled = false;           ///< Interactive user chose Exit; the
+                                          ///< caller aborts before downloading.
 };
 
 /// Parse argv into out. Returns true on success; on failure returns false and
