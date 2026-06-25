@@ -32,11 +32,19 @@
 #include "args.h" // RunParams, Mode
 #include <functional>
 #include <iosfwd>
+#include <ostream>
 #include <string>
 #include <vector>
 
 namespace wcr
 {
+/// Print the MaNGOS banner used on the interactive path.
+void print_banner(std::ostream& out);
+
+/// Clear the console and re-show the banner so each interactive question
+/// appears on a clean screen.
+void clear_screen_and_print_banner(std::ostream& out);
+
 /// Returns the advertised locales for a version (production wraps
 /// fetch_manifest; tests pass a stub). The advertised locale list is identical
 /// across CDN regions, so region is not a parameter.

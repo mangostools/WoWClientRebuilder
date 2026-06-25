@@ -42,7 +42,6 @@
 #include "datarecipe.h"
 #include <curl/curl.h>
 #include <cstdio>
-#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -64,24 +63,6 @@ static void print_usage()
     printf("  --no-cinematics skip the per-locale cinematic movies"
            " (included by default)\n");
     printf("  --yes        skip pre-flight confirmation prompt\n");
-}
-
-/// Print the MaNGOS banner (the logo mangosd/realmd show at startup), framed for
-/// WoWClientRebuilder. Shown once at interactive startup, and again after the
-/// pre-flight confirmation so the download begins on a clean screen.
-static void print_banner()
-{
-    printf(
-        "\n"
-        "  __  __      _  _  ___  ___  ___\n"
-        " |  \\/  |__ _| \\| |/ __|/ _ \\/ __|     WoW Client Rebuilder\n"
-        " | |\\/| / _` | .` | (_ | (_) \\__ \\     byte-identical 4.3.4 / 5.4.8 clients\n"
-        " |_|  |_\\__,_|_|\\_|\\___|\\___/|___/      from Blizzard's live CDN\n"
-        "\n"
-        " For help and support please visit:\n"
-        " Website: https://getmangos.eu\n"
-        "    Repo: https://github.com/mangostools/WoWClientRebuilder\n"
-        "\n");
 }
 
 /// Build the final recipe to reconstruct from parsed run parameters. Fetches
@@ -135,7 +116,6 @@ int main(int argc, char** argv)
     RunParams params;
     if (interactive)
     {
-        print_banner();
         // Production locale source: fetch the partial manifest and read its
         // advertised locales. The list is region-independent.
         wcr::FetchLocales fetchLocales =
@@ -216,6 +196,10 @@ int main(int argc, char** argv)
         opts.regionFallback = wcr::region_fallbacks(params.region);
         long long total = wcr::total_bytes(run.artifacts);
         long long avail = wcr::free_space(params.outDir);
+        if (interactive)
+        {
+            wcr::clear_screen_and_print_banner(std::cout);
+        }
         if (!wcr::confirm_preflight(total, avail, params.yes,
                                     std::cin, std::cout))
         {
@@ -223,12 +207,11 @@ int main(int argc, char** argv)
         }
         else
         {
-            // On the interactive path, clear the menu/pre-flight chatter and
-            // re-show the banner so the download starts on a clean screen.
+            // On the interactive path, clear the pre-flight chatter and
+            // re-show the banner so the download begins on a clean screen.
             if (interactive)
             {
-                std::system("cls");
-                print_banner();
+                wcr::clear_screen_and_print_banner(std::cout);
             }
             reconstruct(run, params.outDir, opts);
             if (params.mode == Mode::FullClient)

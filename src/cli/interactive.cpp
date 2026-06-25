@@ -29,6 +29,7 @@
 
 #include "interactive.h"
 #include <cctype>
+#include <cstdlib>
 #include <istream>
 #include <ostream>
 #include <string>
@@ -96,6 +97,26 @@ const VersionInfo kVersions[] = {
 
 namespace wcr
 {
+void print_banner(std::ostream& out)
+{
+    out << "\n"
+        << "  __  __      _  _  ___  ___  ___\n"
+        << " |  \\/  |__ _| \\| |/ __|/ _ \\/ __|     WoW Client Rebuilder\n"
+        << " | |\\/| / _` | .` | (_ | (_) \\__ \\     byte-identical 4.3.4 / 5.4.8 clients\n"
+        << " |_|  |_\\__,_|_|\\_|\\___|\\___/|___/      from Blizzard's live CDN\n"
+        << "\n"
+        << " For help and support please visit:\n"
+        << " Website: https://getmangos.eu\n"
+        << "    Repo: https://github.com/mangostools/WoWClientRebuilder\n"
+        << "\n";
+}
+
+void clear_screen_and_print_banner(std::ostream& out)
+{
+    std::system("cls");
+    print_banner(out);
+}
+
 Nav prompt_menu(std::istream& in, std::ostream& out, const std::string& title,
                 const std::vector<std::string>& options, bool allowBack,
                 int& index)
@@ -393,6 +414,7 @@ RunParams run_interactive(std::istream& in, std::ostream& out,
     int step = StepMode;
     while (step != StepDone)
     {
+        clear_screen_and_print_banner(out);
         const bool allowBack = (step != StepMode); // nowhere to go back from #1
         Nav nav = Nav::Select;
         switch (step)
@@ -465,6 +487,7 @@ bool should_clear_journal(std::istream& in, std::ostream& out,
     {
         return false;
     }
+    clear_screen_and_print_banner(out);
     return prompt_yes_no(
         in, out,
         "A previous download for '" + outDir +
