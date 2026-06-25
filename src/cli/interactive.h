@@ -51,6 +51,12 @@ void clear_screen_and_print_banner(std::ostream& out);
 using FetchLocales =
     std::function<std::vector<std::string>(const std::string& version)>;
 
+/// Injected screen-reset action (clear the console + re-show the banner) run
+/// before each interactive question. Empty by default so the unit-tested core
+/// stays free of real-console side effects; production passes
+/// clear_screen_and_print_banner.
+using ScreenReset = std::function<void(std::ostream& out)>;
+
 /// Outcome of a navigable prompt: the user made a choice, asked to go Back to
 /// the previous question, or asked to Exit. Back is only offered when the
 /// caller passes allowBack (i.e. not on the first question).
@@ -110,13 +116,18 @@ std::string derive_outdir(const std::string& version, const std::string& build,
 /// can step Back to the previous question or Exit (with a confirmation) at any
 /// of the five setup prompts; an Exit sets RunParams.cancelled so the caller
 /// aborts before downloading. The locale list is obtained via
-/// fetchLocales(version) (skipped, both directions, for Data only).
+/// fetchLocales(version) (skipped, both directions, for Data only). resetScreen,
+/// when set, runs before each question so it appears on a freshly-bannered
+/// screen.
 RunParams run_interactive(std::istream& in, std::ostream& out,
-                          const FetchLocales& fetchLocales);
+                          const FetchLocales& fetchLocales,
+                          const ScreenReset& resetScreen = {});
 
 /// Resume decision: false (resume) when no journal exists; otherwise prompt and
 /// return true ONLY if the user explicitly chooses to start fresh. EOF/empty/
-/// "n" => false (safe default: keep the journal and resume).
+/// "n" => false (safe default: keep the journal and resume). resetScreen, when
+/// set, refreshes the banner before the prompt.
 bool should_clear_journal(std::istream& in, std::ostream& out,
-                          bool journalExists, const std::string& outDir);
+                          bool journalExists, const std::string& outDir,
+                          const ScreenReset& resetScreen = {});
 } // namespace wcr

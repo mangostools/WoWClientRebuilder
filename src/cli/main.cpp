@@ -132,7 +132,8 @@ int main(int argc, char** argv)
         };
         try
         {
-            params = wcr::run_interactive(std::cin, std::cout, fetchLocales);
+            params = wcr::run_interactive(std::cin, std::cout, fetchLocales,
+                                          wcr::clear_screen_and_print_banner);
         }
         catch (const std::exception& e)
         {
@@ -155,7 +156,8 @@ int main(int argc, char** argv)
         // destructive clear requires an explicit yes, so EOF/Enter keep it.
         if (wcr::should_clear_journal(std::cin, std::cout,
                                       wcr::journal_exists(params.outDir),
-                                      params.outDir))
+                                      params.outDir,
+                                      wcr::clear_screen_and_print_banner))
         {
             wcr::clear_journal(params.outDir);
         }
@@ -176,9 +178,6 @@ int main(int argc, char** argv)
     try
     {
         Recipe run = build_run_recipe(params);
-        printf("Reconstructing WoW %s (build %s): %zu artifacts into %s\n",
-               run.version.c_str(), run.build.c_str(),
-               run.artifacts.size(), params.outDir.c_str());
         wcr::Torrent torrent;
         bool haveTorrent = false;
         if (!params.tfilPath.empty())
@@ -200,6 +199,11 @@ int main(int argc, char** argv)
         {
             wcr::clear_screen_and_print_banner(std::cout);
         }
+        // Print the artifact summary AFTER the screen clear so it stays visible
+        // above the pre-flight prompt instead of being wiped by the banner.
+        printf("Reconstructing WoW %s (build %s): %zu artifacts into %s\n",
+               run.version.c_str(), run.build.c_str(),
+               run.artifacts.size(), params.outDir.c_str());
         if (!wcr::confirm_preflight(total, avail, params.yes,
                                     std::cin, std::cout))
         {

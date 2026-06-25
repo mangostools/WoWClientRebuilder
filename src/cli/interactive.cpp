@@ -378,7 +378,8 @@ static bool confirm_exit(std::istream& in, std::ostream& out)
 }
 
 RunParams run_interactive(std::istream& in, std::ostream& out,
-                          const FetchLocales& fetchLocales)
+                          const FetchLocales& fetchLocales,
+                          const ScreenReset& resetScreen)
 {
     RunParams p;
     // Ordered setup questions. Locale is skipped in BOTH directions for
@@ -414,7 +415,10 @@ RunParams run_interactive(std::istream& in, std::ostream& out,
     int step = StepMode;
     while (step != StepDone)
     {
-        clear_screen_and_print_banner(out);
+        if (resetScreen)
+        {
+            resetScreen(out);
+        }
         const bool allowBack = (step != StepMode); // nowhere to go back from #1
         Nav nav = Nav::Select;
         switch (step)
@@ -481,13 +485,17 @@ RunParams run_interactive(std::istream& in, std::ostream& out,
 }
 
 bool should_clear_journal(std::istream& in, std::ostream& out,
-                          bool journalExists, const std::string& outDir)
+                          bool journalExists, const std::string& outDir,
+                          const ScreenReset& resetScreen)
 {
     if (!journalExists)
     {
         return false;
     }
-    clear_screen_and_print_banner(out);
+    if (resetScreen)
+    {
+        resetScreen(out);
+    }
     return prompt_yes_no(
         in, out,
         "A previous download for '" + outDir +

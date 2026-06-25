@@ -340,6 +340,20 @@ TEST_CASE("run_interactive: full client / single locale / EU")
           std::string::npos);
 }
 
+TEST_CASE("run_interactive: resetScreen fires once before each question shown")
+{
+    // full, 4.3.4, enUS, EU, default folder => 5 questions => 5 resets. Proves
+    // the per-question screen reset is invoked without any real-console side
+    // effect (the callback just counts).
+    std::istringstream in("1\n1\n1\n1\n\n");
+    std::ostringstream out;
+    int resets = 0;
+    wcr::FetchLocales stub = [](const std::string&)
+    { return std::vector<std::string>{"enUS", "deDE"}; };
+    wcr::run_interactive(in, out, stub, [&](std::ostream&) { ++resets; });
+    CHECK(resets == 5); // Mode, Version, Locale, Region, Output
+}
+
 TEST_CASE("run_interactive: data only skips the locale prompt")
 {
     // mode=2 (data only), version=1 (4.3.4), region=2 (NA), folder=<empty>.
