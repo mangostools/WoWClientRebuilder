@@ -1,12 +1,19 @@
 # HANDOFF — add WoW 5.4.7 (build 17898) support to WoWClientRebuilder
 
-**Written:** 2026-07-15. **Status:** IMPLEMENTED on `feat/mop547-recipe` (2026-07-15) —
-see `docs/superpowers/plans/2026-07-15-add-547-recipe.md` for the executed plan, the
-measurement outcomes (both exe MD5s pinned, Wow-64 confirmed, COPY-transform PTCH
-support added), and the mfil-discovery record (17898's own manifest name proved
-unrecoverable; the recipe pins the surviving `wow-17930` manifest, whose data view is
-byte-exact for a 17898 client). Owner-driven steps remaining: full regeneration ×2,
-boot test, and the §7.5 extractor payoff test.
+**Written:** 2026-07-15. **Status:** IMPLEMENTED on `feat/mop547-recipe` (2026-07-15).
+Measurement outcomes: both exe MD5s pinned from the real MPQs (`Wow.exe`
+`C726D7F5EDF940F988CC63495B6CF340`, `Wow-64.exe` `51AF423413B0A1E9B17A299B67D94B88` —
+§5.2 answered: 17898 DOES ship a 64-bit client); 17898 ships `MovieProxy.exe` and the
+launcher as COPY-transform creation PTCHes (apply_ptch extended, own commit); the
+final's no-op patches MPQ-verify the inherited dbghelp/divxdecoder /repair pins.
+mfil discovery: 17898's own partial-manifest name proved unrecoverable (manifest
+reconstruction validated byte-exact on sibling builds 17658/17930 → HTTP 200, but
+every 17898 candidate 404s); the recipe pins the surviving `wow-17930` manifest, whose
+data view is byte-exact for a 17898 client (its newest data generation IS 17898's,
+stamped the same minute as 17898's final). Full record in the local working plan
+(`docs/superpowers/plans/2026-07-15-add-547-recipe.md`, git-ignored) and the recipe
+comment. Owner-driven steps remaining: full regeneration ×2, boot test, and the §7.5
+extractor payoff test.
 **Audience:** an agent with no prior context on this work. Everything you need is here.
 
 ---
