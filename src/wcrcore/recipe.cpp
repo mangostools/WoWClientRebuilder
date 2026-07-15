@@ -24,8 +24,8 @@
 
 /**
  * @file recipe.cpp
- * @brief Built-in version recipes for WoW 4.3.4 (Cataclysm) and 5.4.8
- *        (Mists of Pandaria), plus find_recipe() dispatch.
+ * @brief Built-in version recipes for WoW 4.3.4 (Cataclysm) and 5.4.7 /
+ *        5.4.8 (Mists of Pandaria), plus find_recipe() dispatch.
  */
 
 #include "recipe.h"
@@ -275,11 +275,136 @@ const Recipe& recipe_mop548()
     return r;
 }
 
+const Recipe& recipe_mop547()
+{
+    static const std::string cdn =
+        "http://dist.blizzard.com.edgesuite.net/wow-pod-retail/EU/"
+        "15890.direct/";
+    // 5.4.7 exists as a TEST FIXTURE: WowPacketParser carries an
+    // independently sniffed opcode table for exactly build 17898, so a
+    // regenerated 17898 client is the answer key that proves the 5.4.8
+    // opcode extractor before its output is trusted (see
+    // docs/HANDOFF_add_5.4.7_support.md). 5.4.7 opcode VALUES are useless
+    // for 5.4.8 -- ~99% rescramble between the builds; this build checks
+    // the method, it never supplies answers.
+    //
+    // Data pointer: 17898's own partial-manifest name is content-addressed
+    // and did not survive on the pod. Reconstructing manifests from the
+    // sibling bodies is proven (17658/17930 rebuilt byte-exact -> HTTP 200)
+    // but 17898's publish had extra structure and every candidate 404s. The
+    // pinned wow-17930 manifest is the closest surviving authentic one and
+    // its data view is byte-exact for a 17898 client: its newest data
+    // generation IS 17898's (wow-update-*-17898), stamped the same minute
+    // as 17898's final MPQ, sizes CDN-verified (2026-07-15). Known
+    // deviation: the data layer writes Updates/wow-0-17930-Win-final.MPQ
+    // (17930's patch archive) instead of 17898's own -- a downloader cache
+    // file the game never reads. If a genuine wow-17898-*.mfil name ever
+    // surfaces, swap it in here and delete this note. Region-agnostic like
+    // 4.3.4: the NA manifest name is equally unrecoverable (NA bodies
+    // accumulated records in their own order), so no regionManifests map.
+    static const Recipe r = {
+        "5.4.7",
+        "17898",
+        "http://dist.blizzard.com.edgesuite.net/repair/wow",
+        {},
+        {
+            {"base", cdn + "Data/base-Win.MPQ", 31096584},
+            {"final", cdn + "Updates/wow-0-17898-Win-final.MPQ", 28633456}
+        },
+        {
+            // Both exes verified from the real MPQs: PTCH-applied outputs
+            // carry MZ headers and reproduce these md5s (fixture-gated
+            // acceptance tests assert them byte-exact).
+            mpqPtch("Wow.exe", "C726D7F5EDF940F988CC63495B6CF340", "base",
+                    "Wow.exe", "final", "pc-game-hdfiles\\Wow.exe"),
+            mpqPtch("Wow-64.exe", "51AF423413B0A1E9B17A299B67D94B88", "base",
+                    "Wow-64.exe", "final", "pc-game-hdfiles\\Wow-64.exe"),
+            // Root binaries from the content-addressed /repair store. The
+            // set is inherited from recipe_mop548(): 9 of the 11 md5s are
+            // byte-identical between the 4.3.4 (2011) and 5.4.8 (May 2014)
+            // recipes -- static files whose lifetime brackets Feb-2014
+            // 17898 -- and Repair.exe/BackgroundDownloader are pinned to
+            // the era-matched 5.4.8 versions. For dbghelp.dll and
+            // divxdecoder.dll the inheritance is MPQ-verified: 17898's
+            // final carries no-op BSD0 patches for them whose before/after
+            // md5s equal exactly these pins. The excluded self-updating
+            // launcher stays excluded (17898's final ships it as a COPY
+            // patch; running it would stream the pinned build forward).
+            repair("BackgroundDownloader.exe",
+                   "E1FC69A72E4E23A96DBD535B372974A8"),
+            repair("Battle.net.dll", "24433A51A32335A39D2AF8CB55C467D3"),
+            repair("Blizzard Updater.exe",
+                   "82EF43D5F8D1B1C87C3505ECD241FFF6"),
+            repair("dbghelp.dll", "4003E34416EBD25E4C115D49DC15E1A7"),
+            repair("divxdecoder.dll", "57E72CAE12091DAFA29A8E4DB8B4F1D1"),
+            repair("ijl15.dll", "1AA06C81A0621E277E755B965B5E4B5F"),
+            repair("Launcher.exe", "C7C7121E1DD819088403F514FEBD06BA"),
+            repair("Microsoft.VC80.CRT.manifest",
+                   "D34B3DA03C59F38A510EAA8CCC151EC7"),
+            repair("msvcr80.dll", "1169436EE42F860C7DB37A4692B38F0E"),
+            repair("Repair.exe", "859C93F0F2CCE243AB5CC94BB2E54D35"),
+            repair("unicows.dll", "E1102CEDF0C818984C2ACA2A666D4C5F"),
+            // Base-side aux binaries: base-Win.MPQ is byte-shared with the
+            // 5.4.8 recipe (size and CDN identity verified), so these pins
+            // are the same measured values recipe_mop548() uses.
+            mpqExtract("Battle.net-64.dll",
+                       "5CA22973EDF3D10F9C69297A1EB28058", "base",
+                       "Battle.net-64.dll"),
+            mpqExtract("WowError.exe", "EFEF12D480F64B850A6B1C8D5850A484",
+                       "base", "WowError.exe"),
+            mpqExtract("WowError-64.exe",
+                       "A6CCC044CD8756F57330B54ED2C443E6", "base",
+                       "WowError-64.exe"),
+            // Final-side aux binaries measured from the real 17898 final
+            // MPQ. Unlike 18414's BSD0 delta, 17898 ships MovieProxy as a
+            // COPY-transform creation patch (apply_ptch handles both; the
+            // header's own target md5 matches this pin). The extra members
+            // 17898 bundles beyond 5.4.8's set (Utils\locales\*.pak CEF
+            // data, per-locale support URLs) are left to the user's
+            // Repair.exe, mirroring the 5.4.8 recipe's aux-set scope.
+            mpqExtractPatched("MovieProxy.exe",
+                              "06D088960F7661010BE284208D1B0D2C", "base",
+                              "MovieProxy.exe", "final",
+                              "pc-game-hdfiles\\MovieProxy.exe"),
+            mpqExtract("BlizzardError.exe",
+                       "E77B50113B6993E0E0A0E70752CB38A0", "final",
+                       "pc-game-hdfiles\\BlizzardError.exe"),
+            mpqExtract("SystemSurvey.exe",
+                       "79231AB0DFDAC3EBE491A2CA248500CE", "final",
+                       "pc-game-hdfiles\\SystemSurvey.exe"),
+            mpqExtract("Utils\\WowBrowserProxy.exe",
+                       "3E2D2CC5FF922AF20DF543E281256070", "final",
+                       "pc-game-hdfiles\\Utils\\WowBrowserProxy.exe"),
+            mpqExtract("Utils\\libcef.dll",
+                       "9290AE68AA9FA434740C53C12DF1B7DD", "final",
+                       "pc-game-hdfiles\\Utils\\libcef.dll"),
+            mpqExtract("Utils\\icudt.dll",
+                       "8BA26C7B35339998A09B4631CA4AD0A6", "final",
+                       "pc-game-hdfiles\\Utils\\icudt.dll"),
+            // Data-layer pointer -- see the block comment above for why
+            // this pins 17930's manifest. Authored, so md5 is empty.
+            generated("WoW.mfil", "",
+                "version=2\r\n"
+                "server=akamai\r\n"
+                "\tlocation=http://dist.blizzard.com.edgesuite.net/"
+                "wow-pod-retail/EU/15890.direct/\r\n"
+                "manifest_partial=wow-17930-"
+                "EB2922FCE1E9CCB5A735AEAE4AE44870.mfil\r\n")
+        },
+        {} // regionManifests: empty (region-agnostic; see comment above)
+    };
+    return r;
+}
+
 const Recipe* find_recipe(const std::string& version)
 {
     if (version == "4.3.4")
     {
         return &recipe_cata434();
+    }
+    if (version == "5.4.7")
+    {
+        return &recipe_mop547();
     }
     if (version == "5.4.8")
     {

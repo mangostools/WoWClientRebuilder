@@ -225,6 +225,92 @@ TEST_CASE("recipe_mop548 recovers the 9 aux binaries via MpqExtract")
     CHECK(sawMovieProxy);
 }
 
+TEST_CASE("find_recipe resolves 5.4.7 and keeps shipping versions intact")
+{
+    const wcr::Recipe* m547 = wcr::find_recipe("5.4.7");
+    REQUIRE(m547 != nullptr);
+    CHECK(m547->version == "5.4.7");
+    CHECK(m547->build == "17898");
+    // Regression: the shipping paths still resolve unchanged.
+    REQUIRE(wcr::find_recipe("4.3.4") != nullptr);
+    CHECK(wcr::find_recipe("4.3.4")->build == "15595");
+    REQUIRE(wcr::find_recipe("5.4.8") != nullptr);
+    CHECK(wcr::find_recipe("5.4.8")->build == "18414");
+}
+
+TEST_CASE("5.4.7 recipe pins the 17898 binaries and the 17930 data pointer")
+{
+    const wcr::Recipe& r = wcr::recipe_mop547();
+    CHECK(r.repairBase ==
+          "http://dist.blizzard.com.edgesuite.net/repair/wow");
+    REQUIRE(r.mpqs.size() == 2u);
+    CHECK(r.mpqs[0].key == "base");
+    CHECK(r.mpqs[0].size == 31096584); // shared with 5.4.8 -- verified
+    CHECK(r.mpqs[1].key == "final");
+    CHECK(r.mpqs[1].url.find("wow-0-17898-Win-final.MPQ") !=
+          std::string::npos);
+    CHECK(r.mpqs[1].size == 28633456);
+
+    bool sawWow = false, sawWow64 = false, sawMfil = false;
+    bool sawMovieProxy = false;
+    int repairCount = 0;
+    int extractCount = 0;
+    for (const wcr::Artifact& a : r.artifacts)
+    {
+        if (a.source == wcr::Source::RepairMd5)
+        {
+            ++repairCount;
+        }
+        if (a.source == wcr::Source::MpqExtract)
+        {
+            ++extractCount;
+        }
+        if (a.outName == "Wow.exe")
+        {
+            sawWow = true;
+            CHECK(a.source == wcr::Source::MpqPtch);
+            CHECK(a.md5 == "C726D7F5EDF940F988CC63495B6CF340");
+            CHECK(a.patchPath == "pc-game-hdfiles\\Wow.exe");
+        }
+        if (a.outName == "Wow-64.exe")
+        {
+            sawWow64 = true;
+            CHECK(a.source == wcr::Source::MpqPtch);
+            CHECK(a.md5 == "51AF423413B0A1E9B17A299B67D94B88");
+        }
+        if (a.outName == "MovieProxy.exe")
+        {
+            // 17898 ships MovieProxy as a COPY-transform creation patch in
+            // the final MPQ (see apply_ptch); modelled the same way 5.4.8
+            // models its BSD0-patched MovieProxy.
+            sawMovieProxy = true;
+            CHECK(a.source == wcr::Source::MpqExtract);
+            CHECK(a.patchMpqKey == "final");
+            CHECK(a.md5 == "06D088960F7661010BE284208D1B0D2C");
+        }
+        if (a.outName == "WoW.mfil")
+        {
+            sawMfil = true;
+            CHECK(a.source == wcr::Source::Generated);
+            CHECK(a.content.find("wow-17930-"
+                                 "EB2922FCE1E9CCB5A735AEAE4AE44870.mfil") !=
+                  std::string::npos);
+            CHECK(a.content.find("15890.direct") != std::string::npos);
+        }
+    }
+    CHECK(sawWow);
+    CHECK(sawWow64);
+    CHECK(sawMovieProxy);
+    CHECK(sawMfil);
+    CHECK(repairCount == 11);
+    // 3 base-side (shared archive, 5.4.8-identical md5s) + MovieProxy +
+    // 5 final-side plain extracts = 9, mirroring the 5.4.8 aux set.
+    CHECK(extractCount == 9);
+    // 5.4.7's manifest name is underivable for NA -> region-agnostic, like
+    // 4.3.4 (see the recipe comment).
+    CHECK(r.regionManifests.empty());
+}
+
 TEST_CASE("Artifact has size/locale/optional fields with defaults")
 {
     wcr::Artifact a;

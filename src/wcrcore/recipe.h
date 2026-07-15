@@ -25,7 +25,7 @@
 /**
  * @file recipe.h
  * @brief Data-driven version recipes: structs and built-in recipe accessors
- *        for WoW 4.3.4 (Cataclysm) and 5.4.8 (Mists of Pandaria).
+ *        for WoW 4.3.4 (Cataclysm) and 5.4.7 / 5.4.8 (Mists of Pandaria).
  */
 
 #pragma once
@@ -103,6 +103,9 @@ std::string region_rewrite_mfil(
 
 /// Built-in recipe for WoW 4.3.4a (build 15595).
 const Recipe& recipe_cata434();
+/// Built-in recipe for WoW 5.4.7 (build 17898) -- an opcode-extractor
+/// validation fixture; see the recipe definition for the data-pointer note.
+const Recipe& recipe_mop547();
 /// Built-in recipe for WoW 5.4.8 (build 18414).
 const Recipe& recipe_mop548();
 /// Find a built-in recipe by version string; nullptr if unknown.
