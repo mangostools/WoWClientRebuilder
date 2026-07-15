@@ -88,6 +88,12 @@ endif()
 add_test(NAME acceptance_mop_aux
   COMMAND wcrtests "-tc=byte-exact 5.4.8 aux binaries from real fixtures"
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME acceptance_mop547
+  COMMAND wcrtests "-tc=byte-exact 5.4.7 Wow.exe from real fixtures"
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME acceptance_mop547_aux
+  COMMAND wcrtests "-tc=byte-exact 5.4.7 aux binaries from real fixtures"
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME reconstruct_cleanup
   COMMAND wcrtests "-tc=reconstruct removes the source MPQ from the root on success"
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

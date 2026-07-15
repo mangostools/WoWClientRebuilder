@@ -24,10 +24,10 @@
 
 /**
  * @file test_acceptance.cpp
- * @brief Gated local-acceptance test: reconstructs 5.4.8 binaries from real
- *        Blizzard MPQ fixtures and verifies byte-exact size, PE magic, and
- *        MD5 digest.  Skips cleanly when fixtures are absent (CI / fresh
- *        checkout).
+ * @brief Gated local-acceptance tests: reconstruct 5.4.8 and 5.4.7 binaries
+ *        from real Blizzard MPQ fixtures and verify byte-exact size, PE
+ *        magic, and MD5 digest.  Skip cleanly when fixtures are absent
+ *        (CI / fresh checkout).
  */
 
 #include "doctest.h"
@@ -81,6 +81,60 @@ TEST_CASE("byte-exact 5.4.8 aux binaries from real fixtures" *
     wcr::MpqArchive base("fixtures/base-Win.MPQ");
     wcr::MpqArchive fin("fixtures/wow-0-18414-Win-final.MPQ");
     const wcr::Recipe& r = wcr::recipe_mop548();
+    int checked = 0;
+    for (const wcr::Artifact& a : r.artifacts)
+    {
+        if (a.source != wcr::Source::MpqExtract) { continue; }
+        wcr::MpqArchive& src = (a.baseMpqKey == "final") ? fin : base;
+        wcr::Bytes data = src.extract(a.basePath);
+        if (!a.patchMpqKey.empty())
+        {
+            data = wcr::apply_ptch(data, fin.extract(a.patchPath));
+        }
+        CHECK(wcr::md5_hex(data) == a.md5);
+        ++checked;
+    }
+    CHECK(checked == 9);
+}
+
+// 5.4.7 (17898) fixture gate: the base MPQ is the same shared archive the
+// 5.4.8 tests use; only the final differs (fixtures/wow-0-17898-Win-final.MPQ,
+// 28,633,456 bytes from Updates/ on the 15890.direct pod).
+static const bool fixtures_547_present =
+    exists("fixtures/base-Win.MPQ") &&
+    exists("fixtures/wow-0-17898-Win-final.MPQ");
+
+TEST_CASE("byte-exact 5.4.7 Wow.exe from real fixtures" *
+          doctest::skip(!fixtures_547_present))
+{
+    wcr::MpqArchive base("fixtures/base-Win.MPQ");
+    wcr::MpqArchive fin("fixtures/wow-0-17898-Win-final.MPQ");
+
+    wcr::Bytes wow = wcr::apply_ptch(base.extract("Wow.exe"),
+                                     fin.extract("pc-game-hdfiles\\Wow.exe"));
+    CHECK(wow.size() == 13145648u);
+    CHECK(wow[0] == 'M');
+    CHECK(wow[1] == 'Z');
+    CHECK(wcr::md5_hex(wow) == "C726D7F5EDF940F988CC63495B6CF340");
+
+    wcr::Bytes wow64 = wcr::apply_ptch(
+        base.extract("Wow-64.exe"), fin.extract("pc-game-hdfiles\\Wow-64.exe"));
+    CHECK(wow64.size() == 20896304u);
+    CHECK(wow64[0] == 'M');
+    CHECK(wow64[1] == 'Z');
+    CHECK(wcr::md5_hex(wow64) == "51AF423413B0A1E9B17A299B67D94B88");
+}
+
+// Reproduce every 5.4.7 MpqExtract artifact the way reconstruct() does and
+// assert the recipe md5s byte-exact. Exercises the COPY-transform PTCH path
+// on real data: 17898 ships MovieProxy.exe as a creation patch, unlike
+// 18414's BSD0 delta.
+TEST_CASE("byte-exact 5.4.7 aux binaries from real fixtures" *
+          doctest::skip(!fixtures_547_present))
+{
+    wcr::MpqArchive base("fixtures/base-Win.MPQ");
+    wcr::MpqArchive fin("fixtures/wow-0-17898-Win-final.MPQ");
+    const wcr::Recipe& r = wcr::recipe_mop547();
     int checked = 0;
     for (const wcr::Artifact& a : r.artifacts)
     {
