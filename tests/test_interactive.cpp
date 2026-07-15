@@ -210,12 +210,13 @@ TEST_CASE("prompt_mode maps menu choices to Mode; EOF is Exit")
 
 TEST_CASE("prompt_version returns the chosen version string")
 {
-    std::istringstream in("2\n");
+    std::istringstream in("3\n");
     std::ostringstream out;
     std::string v;
     CHECK(wcr::prompt_version(in, out, true, v) == wcr::Nav::Select);
     CHECK(v == "5.4.8");
     CHECK(out.str().find("4.3.4 (15595)") != std::string::npos);
+    CHECK(out.str().find("5.4.7 (17898)") != std::string::npos);
     CHECK(out.str().find("5.4.8 (18414)") != std::string::npos);
 }
 
@@ -246,6 +247,7 @@ TEST_CASE("prompt_region returns EU or NA, and b is Back")
 TEST_CASE("build_for_version maps known versions and rejects unknown")
 {
     CHECK(wcr::build_for_version("4.3.4") == "15595");
+    CHECK(wcr::build_for_version("5.4.7") == "17898");
     CHECK(wcr::build_for_version("5.4.8") == "18414");
     CHECK(wcr::build_for_version("9.9.9") == "");
 }
@@ -462,8 +464,9 @@ TEST_CASE("run_interactive: EOF mid-flow cancels (no confirm, no infinite loop)"
 TEST_CASE("run_interactive: DataOnly Back from Region skips Locale to Version")
 {
     // data, 4.3.4, 'b' at Region -> back to Version (Locale skipped), pick
-    // 5.4.8, region=EU, default folder.
-    std::istringstream in("2\n1\nb\n2\n1\n\n");
+    // 5.4.8 (menu index 3 since 5.4.7 sits between), region=EU, default
+    // folder.
+    std::istringstream in("2\n1\nb\n3\n1\n\n");
     std::ostringstream out;
     bool fetched = false;
     wcr::FetchLocales stub = [&](const std::string&)

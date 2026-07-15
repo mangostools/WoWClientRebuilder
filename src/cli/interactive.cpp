@@ -91,6 +91,7 @@ struct VersionInfo
 };
 const VersionInfo kVersions[] = {
     {"4.3.4", "15595"},
+    {"5.4.7", "17898"},
     {"5.4.8", "18414"},
 };
 } // namespace
@@ -102,7 +103,7 @@ void print_banner(std::ostream& out)
     out << "\n"
         << "  __  __      _  _  ___  ___  ___\n"
         << " |  \\/  |__ _| \\| |/ __|/ _ \\/ __|     WoW Client Rebuilder\n"
-        << " | |\\/| / _` | .` | (_ | (_) \\__ \\     byte-identical 4.3.4 / 5.4.8 clients\n"
+        << " | |\\/| / _` | .` | (_ | (_) \\__ \\     byte-identical 4.3.4 / 5.4.x clients\n"
         << " |_|  |_\\__,_|_|\\_|\\___|\\___/|___/      from Blizzard's live CDN\n"
         << "\n"
         << " For help and support please visit:\n"
