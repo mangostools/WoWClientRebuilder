@@ -104,6 +104,84 @@ TEST_CASE("apply_ptch reconstructs a known target (uncompressed BSD0/BSDIFF40)")
     CHECK(out == Bytes({1, 2, 3, 4, 5}));
 }
 
+TEST_CASE("apply_ptch applies a COPY-transform creation patch (payload is the output)")
+{
+    // MoP 5.4.7 (build 17898) ships several final-MPQ members as PTCH
+    // envelopes whose XFRM type is "COPY": a creation patch with
+    // sizeBeforePatch = 0, a zeroed source MD5, and the raw output file as
+    // the payload (e.g. pc-game-hdfiles\MovieProxy.exe). The base bytes are
+    // irrelevant; the payload IS the file.
+    const Bytes payload = {9, 8, 7, 6, 5};
+
+    Bytes p;
+    for (char c : std::string("PTCH"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 0x44 + (uint32_t)payload.size()); // sizeOfPatchData
+    put32(p, 0);                               // sizeBeforePatch: creation
+    put32(p, (uint32_t)payload.size());        // sizeAfterPatch
+    for (char c : std::string("MD5_"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 40); // md5 block size
+    for (int i = 0; i < 32; i++)
+    {
+        p.push_back(0); // zeroed source + target md5 (unverified)
+    }
+    for (char c : std::string("XFRM"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 12 + (uint32_t)payload.size()); // xfrmBlockSize
+    for (char c : std::string("COPY"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    p.insert(p.end(), payload.begin(), payload.end()); // verbatim body
+
+    // The base is ignored for COPY: an empty source (true creation) and a
+    // non-empty source (17898 pairs the patch with base's MovieProxy.exe)
+    // must both yield exactly the payload.
+    CHECK(wcr::apply_ptch(Bytes{}, p) == payload);
+    CHECK(wcr::apply_ptch(Bytes{0xAA, 0xBB}, p) == payload);
+}
+
+TEST_CASE("apply_ptch rejects a COPY patch whose payload size mismatches "
+          "sizeAfterPatch")
+{
+    const Bytes payload = {1, 2, 3};
+    Bytes p;
+    for (char c : std::string("PTCH"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 0x44 + (uint32_t)payload.size()); // sizeOfPatchData
+    put32(p, 0);                               // sizeBeforePatch
+    put32(p, (uint32_t)payload.size() + 1);    // sizeAfterPatch WRONG (4 != 3)
+    for (char c : std::string("MD5_"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 40); // md5 block size
+    for (int i = 0; i < 32; i++)
+    {
+        p.push_back(0); // md5 placeholder
+    }
+    for (char c : std::string("XFRM"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    put32(p, 12 + (uint32_t)payload.size()); // xfrmBlockSize
+    for (char c : std::string("COPY"))
+    {
+        p.push_back((uint8_t)c);
+    }
+    p.insert(p.end(), payload.begin(), payload.end());
+    CHECK_THROWS_AS(wcr::apply_ptch(Bytes{}, p), std::runtime_error);
+}
+
 TEST_CASE("apply_ptch rejects malformed input")
 {
     Bytes base = {0, 0, 0, 0};

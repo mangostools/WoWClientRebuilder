@@ -102,6 +102,11 @@ namespace wcr
 //   0x3C  uint32  xfrmBlockSize    (size of the transform block incl.
 //   "BSD0"+data) 0x40  "BSD0"  transform type   (BSD0 = BSDIFF40 data, possibly
 //   RLE-compressed) 0x44  byte[]  transform payload
+//
+// Transform types seen in the wild: "BSD0" (BSDIFF40 delta -- every 4.3.4 and
+// 5.4.8 patch member) and "COPY" (the payload IS the output file, used by MoP
+// 5.4.7/17898 for creation patches: sizeBeforePatch = 0, zeroed source MD5,
+// e.g. pc-game-hdfiles\MovieProxy.exe). For COPY the base bytes play no part.
 Bytes apply_ptch(const Bytes& base, const Bytes& patch)
 {
     const uint8_t* p = patch.data();
@@ -121,9 +126,10 @@ Bytes apply_ptch(const Bytes& base, const Bytes& patch)
         throw std::runtime_error("no XFRM");
     }
     uint32_t xfrmBlockSize = rd32(p + 0x3C);
-    if (std::memcmp(p + 0x40, "BSD0", 4))
+    const bool isCopy = std::memcmp(p + 0x40, "COPY", 4) == 0;
+    if (!isCopy && std::memcmp(p + 0x40, "BSD0", 4))
     {
-        throw std::runtime_error("patch type != BSD0");
+        throw std::runtime_error("patch type != BSD0/COPY");
     }
     // HDR = 0x44: the byte offset where the transform payload begins.
     // SIZE_OF_XFRM_HEADER = 12: "XFRM"(4) + xfrmBlockSize field(4) + "BSD0"(4).
@@ -158,6 +164,18 @@ Bytes apply_ptch(const Bytes& base, const Bytes& patch)
     else
     {
         std::memcpy(dec.data(), p + HDR, cbCompressed);
+    }
+
+    // --- COPY transform: the payload IS the output ---------------------------
+    // Creation patches (base ignored; see the header-layout note above). The
+    // declared output size must still match -- fail closed on any mismatch.
+    if (isCopy)
+    {
+        if (cbDecompressed != sizeAfter)
+        {
+            throw std::runtime_error("PTCH COPY size != sizeAfterPatch");
+        }
+        return dec;
     }
 
     // --- 3. Apply the BSDIFF40 patch ----------------------------------------
