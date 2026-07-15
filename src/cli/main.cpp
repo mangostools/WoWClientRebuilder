@@ -53,7 +53,7 @@ static void print_usage()
 {
     printf("usage: wowrebuild <mode> <version> [options] <outDir>\n");
     printf("  mode:        client | data | locale\n");
-    printf("  version:     4.3.4 | 5.4.8\n");
+    printf("  version:     4.3.4 | 5.4.7 | 5.4.8\n");
     printf("  --locale L   csv list (e.g. enUS,deDE) or 'all'"
            " (default enUS)\n");
     printf("  --tfil path  optional .tfil torrent for piece verification"
