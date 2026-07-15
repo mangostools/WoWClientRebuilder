@@ -7,8 +7,9 @@ ships only code, downloads everything at runtime from official Blizzard CDN endp
 verifies files by MD5, and discards the temporary patch archives after use. Output is
 byte-identical to a real install.
 
-Supported clients: **Cataclysm 4.3.4 (15595)** and **Mists of Pandaria 5.4.8 (18414)** —
-the pre-CASC "pod-retail" builds Blizzard still serves.
+Supported clients: **Cataclysm 4.3.4 (15595)**, **Mists of Pandaria 5.4.7 (17898)** — an
+opcode-tooling test fixture — and **Mists of Pandaria 5.4.8 (18414)**; the pre-CASC
+"pod-retail" builds Blizzard still serves.
 
 ## Features
 
@@ -132,7 +133,7 @@ is downloaded.
 ```
 wowrebuild <mode> <version> [options] <outDir>
   mode:         client | data | locale
-  version:      4.3.4 | 5.4.8
+  version:      4.3.4 | 5.4.7 | 5.4.8
   --locale L    csv list (e.g. enUS,deDE) or 'all'   (default enUS)
   --region R    EU | NA                               (default EU)
   --no-cinematics skip the per-locale cinematic movies (included by default)
@@ -152,6 +153,7 @@ How the program binaries are sourced per version:
 | Version | Client | Binary source |
 |---|---|---|
 | `4.3.4` | Cataclysm (15595) | 32-bit from the content-addressed `/repair` store; 64-bit from `WoWLive-64-Win-15595.zip` [^launcher] |
+| `5.4.7` | Mists of Pandaria (17898) | As 5.4.8, from the shared `base-Win.MPQ` + `wow-0-17898-Win-final.MPQ` (17898 ships `MovieProxy.exe` as a COPY-transform creation patch). Data pointer pins the surviving `wow-17930` partial manifest — byte-exact for a 17898 client; 17898's own manifest name did not survive (see the recipe comment). Exists as an opcode-extractor validation fixture [^mop547] |
 | `5.4.8` | Mists of Pandaria (18414) | `Wow.exe`/`Wow-64.exe` PTCH-applied from `base-Win.MPQ` + `wow-0-18414-Win-final.MPQ`; the aux binaries extracted from those MPQs |
 
 The `Data/` layer and locales are downloaded from the build's partial manifest in both
@@ -162,6 +164,12 @@ cases, and every produced file is MD5-verified.
     the client toward current retail and corrupts the pinned 4.3.4 install. The file is
     inert unless launched.
 
+[^mop547]: WowPacketParser carries an independently sniffed opcode table for exactly
+    build 17898, so a regenerated 5.4.7 client is the known answer key against which the
+    5.4.8 opcode extractor is validated. 5.4.7 opcode values are useless for 5.4.8
+    (~99% rescramble between builds) — the build checks the method, it never supplies
+    answers.
+
 ## Running tests
 
 ```powershell
@@ -171,12 +179,13 @@ ctest --test-dir WoWClientRebuilder_build -C Release
 The doctest suite (100+ cases across 21 `tests/test_*.cpp` files) runs fully offline.
 Two network/fixture-gated acceptance groups sit alongside it:
 
-- **acceptance** (5.4.8): three fixture-gated cases driven from local MPQ fixtures in
-  `WoWClientRebuilder_build/fixtures/` — the `Wow.exe`/`Wow-64.exe` byte-exact pair (the
-  named `acceptance` ctest target), the 9 recovered aux binaries (MpqExtract artifacts),
-  and an MPQ-handle cleanup regression (the latter two run under the `wcrtests` omnibus
-  target). All skip cleanly when the fixtures are absent, so CI / fresh checkouts stay
-  green.
+- **acceptance** (5.4.8 + 5.4.7): fixture-gated cases driven from local MPQ fixtures in
+  `WoWClientRebuilder_build/fixtures/` — per build, the `Wow.exe`/`Wow-64.exe` byte-exact
+  pair and the 9 recovered aux binaries (ctest targets `acceptance`/`acceptance_mop_aux`
+  for 5.4.8 against `wow-0-18414-Win-final.MPQ`, `acceptance_mop547`/
+  `acceptance_mop547_aux` for 5.4.7 against `wow-0-17898-Win-final.MPQ`, both next to the
+  shared `base-Win.MPQ`), plus an MPQ-handle cleanup regression. All skip cleanly when
+  the fixtures are absent, so CI / fresh checkouts stay green.
 - **acceptance_cata434** (4.3.4): an opt-in live test, **registered only when you configure
   with `-DWCR_LIVE_TESTS=ON`**. It downloads ~46 MB from Blizzard's CDN and verifies the
   binaries byte-exact. Registering it auto-sets `WCR_LIVE=1` so it actually runs (instead

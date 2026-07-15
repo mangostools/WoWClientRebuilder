@@ -17,9 +17,10 @@ discards the temporary patch archives — leaving an install byte-identical to a
   client data into the repo. The tool's whole reason to exist is that it distributes none of it. Test
   fixtures made from real client files stay local and are git-ignored; the fixture-gated acceptance tests
   skip cleanly when they are absent.
-- **Supported builds are the pre-CASC pod-retail boundary only: Cataclysm 4.3.4 (15595) and MoP 5.4.8
-  (18414).** WoD 6.x+/Legion/BfA (CASC + purged NGDP build-configs) and WotLK 3.3.5a (dead streaming CDN)
-  are **not** regenerable — do not add recipes or code paths for them.
+- **Supported builds are the pre-CASC pod-retail boundary only: Cataclysm 4.3.4 (15595), MoP 5.4.8
+  (18414), and MoP 5.4.7 (17898) — the latter an opcode-tooling test fixture.** WoD 6.x+/Legion/BfA
+  (CASC + purged NGDP build-configs) and WotLK 3.3.5a (dead streaming CDN) are **not** regenerable — do
+  not add recipes or code paths for them.
 - **The CDN is HTTP-only.** The pod-retail hosts fail HTTPS certificate verification; this is expected. Do
   **not** "harden" the fetch by switching to `https://`.
 - **The partial manifest is the trust anchor.** Its filename is the MD5 of its body, so `fetch_manifest`
