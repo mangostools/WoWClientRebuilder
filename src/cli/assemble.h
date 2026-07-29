@@ -41,6 +41,14 @@ namespace wcr
 /// recipe r. Throws std::runtime_error if no such artifact exists.
 std::string pointer_text_from_recipe(const Recipe& r);
 
+/// Return the pointer text to fetch the partial manifest for `region`: the
+/// embedded WoW.mfil rewritten to that region. The manifest's records carry
+/// region-specific sizes, so the manifest must come from the same region the
+/// data URLs are swapped to. A no-op for versions whose manifest name is not
+/// region-locked, and the substituted name is still one pinned in the recipe,
+/// so fetch_manifest's content-hash authentication is unaffected.
+std::string pointer_text_for_region(const Recipe& r, const std::string& region);
+
 /// Build the Recipe to reconstruct. For Mode::FullClient the result is base
 /// with data appended to its artifacts (binaries + data). For DataOnly and
 /// LocaleOnly the result carries base's version/build/repairBase/zips/mpqs but

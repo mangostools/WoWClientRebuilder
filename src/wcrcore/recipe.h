@@ -76,6 +76,12 @@ struct MpqSource
         std::string key;  ///< Referenced by Artifact base/patch MPQ keys.
         std::string url;  ///< Download URL.
         long long size = -1; ///< Expected byte size (-1 to skip the check).
+        /// Region -> expected byte size, for archives Blizzard builds per
+        /// region. apply_region_to_recipe substitutes the matching entry into
+        /// `size` alongside the URL swap, so the integrity check follows the
+        /// archive actually fetched. `size` above holds the recipe's default
+        /// region; empty here means the archive is region-identical.
+        std::vector<std::pair<std::string, long long>> regionSizes;
 };
 
 /// A full set of artifacts for one client version, plus their sources.

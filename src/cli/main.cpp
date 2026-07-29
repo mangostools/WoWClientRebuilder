@@ -75,8 +75,17 @@ static Recipe build_run_recipe(const RunParams& params)
     {
         throw std::runtime_error("unknown version '" + params.version + "'");
     }
-    Pointer ptr = parse_pointer(pointer_text_from_recipe(*base));
+    // Fetch the SELECTED region's partial manifest, not always the recipe's
+    // default one: its records carry region-specific sizes, and a Data artifact
+    // pairs the manifest's rec.size with the region-swapped URL below. MoP's
+    // Updates/wow-0-18414-Win-final.MPQ is 21729424 in EU and 21729944 in NA
+    // (the last of 394 records), so an EU size on an NA URL failed the download
+    // size check at the very end of a ~21.7 GB run.
+    Pointer ptr =
+        parse_pointer(pointer_text_for_region(*base, params.region));
     Manifest manifest = fetch_manifest(ptr);
+    // Still needed for versions with no region-locked manifest name: their
+    // pointer keeps the recipe's region, so the data URLs must be swapped here.
     manifest.dataBaseUrl =
         wcr::swap_region(manifest.dataBaseUrl,
                          wcr::region_segment(params.region));

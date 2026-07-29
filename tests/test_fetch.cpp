@@ -277,6 +277,17 @@ TEST_CASE("apply_region_to_recipe: NA swaps mpq URLs + WoW.mfil, EU no-op")
     {
         CHECK(m.url.find("/NA/") != std::string::npos);
         CHECK(m.url.find("/EU/") == std::string::npos);
+        // The final update MPQ is region-specific: its pinned size must follow
+        // the URL, or the correct NA download is rejected as a size mismatch.
+        // base-Win.MPQ is region-identical and keeps its single size.
+        if (m.key == "final")
+        {
+            CHECK(m.size == 21729944);
+        }
+        if (m.key == "base")
+        {
+            CHECK(m.size == 31096584);
+        }
     }
     for (const wcr::Artifact& a : na.artifacts)
     {
@@ -293,7 +304,51 @@ TEST_CASE("apply_region_to_recipe: NA swaps mpq URLs + WoW.mfil, EU no-op")
     for (const wcr::MpqSource& m : eu.mpqs)
     {
         CHECK(m.url.find("/EU/") != std::string::npos);
+        if (m.key == "final")
+        {
+            CHECK(m.size == 21729424);
+        }
+        if (m.key == "base")
+        {
+            CHECK(m.size == 31096584);
+        }
     }
+}
+
+TEST_CASE("apply_region_to_recipe: per-region MPQ size overrides, else default")
+{
+    wcr::Recipe base;
+    wcr::MpqSource perRegion;
+    perRegion.key = "perRegion";
+    perRegion.url = "http://dist/wow-pod-retail/EU/15890.direct/Data/a.MPQ";
+    perRegion.size = 100;
+    perRegion.regionSizes = {{"EU", 100}, {"NA", 620}};
+    base.mpqs.push_back(perRegion);
+
+    wcr::MpqSource shared;
+    shared.key = "shared";
+    shared.url = "http://dist/wow-pod-retail/EU/15890.direct/Data/b.MPQ";
+    shared.size = 7;
+    base.mpqs.push_back(shared);
+
+    wcr::Recipe na = base;
+    wcr::apply_region_to_recipe(na, base, "NA");
+    CHECK(na.mpqs[0].size == 620);
+    CHECK(na.mpqs[1].size == 7); // no override -> default survives
+
+    wcr::Recipe eu = base;
+    wcr::apply_region_to_recipe(eu, base, "EU");
+    CHECK(eu.mpqs[0].size == 100);
+    CHECK(eu.mpqs[1].size == 7);
+
+    // A region with no entry in the map leaves the default in place rather than
+    // clearing the check (region_segment maps anything but NA to /EU/, so the
+    // URL stays EU and the EU size is the right default). --region already
+    // rejects anything but EU/NA; this pins the defensive behaviour.
+    wcr::Recipe other = base;
+    wcr::apply_region_to_recipe(other, base, "KR");
+    CHECK(other.mpqs[0].size == 100);
+    CHECK(other.mpqs[1].size == 7);
 }
 
 TEST_CASE("PlainUrl wrong-md5 throws and removes .part file via the shared catch path")

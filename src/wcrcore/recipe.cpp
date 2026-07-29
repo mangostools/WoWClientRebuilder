@@ -185,8 +185,20 @@ const Recipe& recipe_mop548()
         "http://dist.blizzard.com.edgesuite.net/repair/wow",
         {},
         {
+            // base-Win.MPQ is byte-identical in both regions (probed live), so
+            // it needs no per-region size.
             {"base", cdn + "Data/base-Win.MPQ", 31096584},
-            {"final", cdn + "Updates/wow-0-18414-Win-final.MPQ", 21729424}
+            // The final update MPQ is REGION-SPECIFIC (both probed live): EU is
+            // 21729424 bytes, NA 21729944. Only the installer metadata differs
+            // -- InstallCD\Unpack\{Localization,ProductData}.xml -- while the
+            // (listfile), delete.lst, hdfiles.lst and every pc-game-hdfiles\
+            // member this recipe consumes are byte-identical md5s, so the
+            // rebuilt client is the same from either region. `size` carries the
+            // EU value (the URLs above are EU) and regionSizes overrides it
+            // when --region flips the URL; without that override a correct NA
+            // download is rejected as a size mismatch.
+            {"final", cdn + "Updates/wow-0-18414-Win-final.MPQ", 21729424,
+             {{"EU", 21729424}, {"NA", 21729944}}}
         },
         {
             mpqPtch("Wow.exe", "24FD2CBB340D57C51B6F7A1C1D60E693", "base",
