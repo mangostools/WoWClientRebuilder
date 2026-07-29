@@ -24,10 +24,12 @@
 
 #include "doctest.h"
 #include "assemble.h"
+#include "fetch.h"
 #include "mfil.h"
 #include "recipe.h"
 #include "datarecipe.h"
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace wcr;
@@ -170,4 +172,50 @@ TEST_CASE("assemble_recipe rejects a data artifact colliding with a base binary"
         d.outName = "Data/common.MPQ";
         CHECK_NOTHROW(assemble_recipe(base, {d}, Mode::FullClient));
     }
+}
+
+TEST_CASE("pointer_text_for_region: fetch and write name the same region")
+{
+    // The manifest's records carry region-specific sizes (MoP's
+    // Updates/wow-0-18414-Win-final.MPQ is 21729424 in EU, 21729944 in NA), so
+    // the manifest fetched here must be the same region whose URLs the run
+    // downloads from. Fetching EU's manifest for an NA run paired an EU size
+    // with an NA URL and failed on the last of 394 records, after ~21.7 GB.
+    // The written WoW.mfil is the client's own copy of that pointer: if the two
+    // ever disagree, one of them is wrong.
+    const Recipe& base = recipe_mop548();
+    const char* regions[] = {"EU", "NA"};
+    const char* names[] = {"E68C6C849BBD16D2A8A153AFC865062F",
+                           "447E3E618F731CCBF4F7D2C4E56C5644"};
+    for (int i = 0; i < 2; ++i)
+    {
+        const std::string region = regions[i];
+        const std::string fetched = pointer_text_for_region(base, region);
+        Pointer ptr = parse_pointer(fetched);
+        CHECK(ptr.dataBaseUrl.find("/" + region + "/") != std::string::npos);
+        CHECK(ptr.partialName == std::string("wow-18414-") + names[i] +
+                                     ".mfil");
+
+        Recipe run = base;
+        apply_region_to_recipe(run, base, region);
+        std::string written;
+        for (const Artifact& a : run.artifacts)
+        {
+            if (a.outName == "WoW.mfil")
+            {
+                written = a.content;
+            }
+        }
+        CHECK(written == fetched);
+    }
+}
+
+TEST_CASE("pointer_text_for_region: no region-locked name leaves the pointer")
+{
+    // 4.3.4 has no regionManifests, so its pointer is unchanged for either
+    // region and main.cpp's dataBaseUrl swap remains the only region switch.
+    const Recipe& cata = recipe_cata434();
+    const std::string plain = pointer_text_from_recipe(cata);
+    CHECK(pointer_text_for_region(cata, "EU") == plain);
+    CHECK(pointer_text_for_region(cata, "NA") == plain);
 }

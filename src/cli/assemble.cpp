@@ -108,6 +108,12 @@ std::string pointer_text_from_recipe(const Recipe& r)
         "recipe has no Generated WoW.mfil pointer artifact");
 }
 
+std::string pointer_text_for_region(const Recipe& r, const std::string& region)
+{
+    return region_rewrite_mfil(pointer_text_from_recipe(r), r.regionManifests,
+                               region);
+}
+
 Recipe assemble_recipe(const Recipe& base, const std::vector<Artifact>& data,
                        Mode mode)
 {
