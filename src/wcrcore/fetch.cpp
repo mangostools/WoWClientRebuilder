@@ -111,6 +111,16 @@ void apply_region_to_recipe(Recipe& run, const Recipe& base,
     for (MpqSource& m : run.mpqs)
     {
         m.url = swap_region(m.url, region_segment(region));
+        // Some archives are built per region (MoP's final update MPQ), so the
+        // pinned size must follow the URL or the correct download is rejected
+        // as a size mismatch. Regions absent from the map keep the default.
+        for (const std::pair<std::string, long long>& rs : m.regionSizes)
+        {
+            if (rs.first == region)
+            {
+                m.size = rs.second;
+            }
+        }
     }
     for (Artifact& a : run.artifacts)
     {
