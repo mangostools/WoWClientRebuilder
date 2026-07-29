@@ -324,15 +324,41 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                     bool recovered = false;
                     for (const std::string& fb : opts.regionFallback)
                     {
+                        // A region switch must never resume the selected
+                        // region's partial bytes: the same-named archive can
+                        // differ between regions (MoP's
+                        // Updates/wow-0-18414-Win-final.MPQ), Data artifacts
+                        // carry no MD5, and a file spliced from two regions
+                        // would still pass the size check if the lengths happen
+                        // to agree. So each fallback downloads whole into its
+                        // OWN part file, and the primary's part is only
+                        // discarded once a fallback has completed. That keeps
+                        // an interrupted primary download resumable on a later
+                        // run instead of throwing its progress away.
+                        std::string fbPart = part + ".fb";
+                        std::error_code fbec;
+                        std::filesystem::remove(fbPart, fbec);
+                        DownloadOpts fopts = popts;
+                        fopts.resume = false;
                         try
                         {
-                            download_file(swap_region(a.url, fb), part, popts);
+                            download_file(swap_region(a.url, fb), fbPart,
+                                          fopts);
+                            std::filesystem::remove(part, fbec);
+                            std::filesystem::rename(fbPart, part);
                             recovered = true;
                             break;
                         }
                         catch (const std::exception&)
                         {
-                            // try the next fallback region
+                            // Try the next fallback region, again from scratch.
+                            // Note fopts.expected_size is still the SELECTED
+                            // region's size, so a fallback whose archive is
+                            // region-specific fails this size check rather than
+                            // yielding an unvalidated file: the fallback's
+                            // authentic size is only known from that region's
+                            // manifest, which this layer does not have.
+                            std::filesystem::remove(fbPart, fbec);
                         }
                     }
                     if (!recovered)

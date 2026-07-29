@@ -350,3 +350,116 @@ TEST_CASE("region_failover_eu_to_na")
 
     fs::remove_all(root);
 }
+
+TEST_CASE("region_failover_does_not_splice_a_stale_part")
+{
+    // A region switch must not resume the selected region's partial bytes into
+    // the other region's download. Data artifacts carry no MD5, so a spliced
+    // file whose total length happens to match would pass the only check there
+    // is. The stale part here is exactly as long as the shortfall would need to
+    // be, so a resuming implementation produces a size-correct, content-wrong
+    // file and this test fails.
+    namespace fs = std::filesystem;
+    fs::path root = fs::temp_directory_path() / "wcr_failover_splice";
+    fs::remove_all(root);
+    fs::path pod = root / "wow-pod-retail";
+    fs::path na = pod / "NA" / "15050.direct" / "Data";
+    fs::path out = root / "out";
+    fs::create_directories(na);
+    fs::create_directories(out / "Data");
+    // The EU tree is deliberately absent, forcing the NA failover.
+
+    {
+        std::ofstream f(na / "x.bin", std::ios::binary);
+        const char* bytes = "NANANANA";
+        f.write(bytes, 8);
+    }
+    // A stale partial download from the primary region, 3 bytes long.
+    {
+        std::ofstream f(out / "Data" / "x.bin.part", std::ios::binary);
+        const char* bytes = "EUE";
+        f.write(bytes, 3);
+    }
+
+    std::string euUrl = std::string("file:///") +
+        (pod / "EU" / "15050.direct" / "Data" / "x.bin").generic_string();
+
+    wcr::Recipe r;
+    r.version = "4.3.4";
+    r.build = "15595";
+    wcr::Artifact a;
+    a.outName = "Data/x.bin";
+    a.source = wcr::Source::PlainUrl;
+    a.url = euUrl;
+    a.size = 8; // "NANANANA"
+    r.artifacts.push_back(a);
+
+    wcr::ReconstructOpts opts;
+    opts.regionFallback = {"/NA/"};
+    REQUIRE_NOTHROW(reconstruct(r, out.string(), opts));
+
+    {
+        std::ifstream f(out / "Data" / "x.bin", std::ios::binary);
+        std::string got((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+        // Whole fallback content, with none of the stale primary bytes.
+        CHECK(got == "NANANANA");
+    }
+    // The scratch part files must not survive a successful reconstruct.
+    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part"));
+    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part.fb"));
+
+    fs::remove_all(root);
+}
+
+TEST_CASE("region_failover_keeps_the_primary_part_when_every_region_fails")
+{
+    // Deleting the primary's partial bytes just to attempt a fallback would
+    // throw away resumable progress on a multi-GB Data file. When every region
+    // fails the artifact fails too, but the primary .part must survive intact
+    // so the next run can resume it.
+    namespace fs = std::filesystem;
+    fs::path root = fs::temp_directory_path() / "wcr_failover_keep_part";
+    fs::remove_all(root);
+    fs::path pod = root / "wow-pod-retail";
+    fs::path out = root / "out";
+    fs::create_directories(pod);
+    fs::create_directories(out / "Data");
+    // Neither the EU nor the NA tree exists, so both attempts fail.
+
+    {
+        std::ofstream f(out / "Data" / "x.bin.part", std::ios::binary);
+        const char* bytes = "PARTIAL";
+        f.write(bytes, 7);
+    }
+
+    std::string euUrl = std::string("file:///") +
+        (pod / "EU" / "15050.direct" / "Data" / "x.bin").generic_string();
+
+    wcr::Recipe r;
+    r.version = "4.3.4";
+    r.build = "15595";
+    wcr::Artifact a;
+    a.outName = "Data/x.bin";
+    a.source = wcr::Source::PlainUrl;
+    a.url = euUrl;
+    a.size = 8;
+    r.artifacts.push_back(a);
+
+    wcr::ReconstructOpts opts;
+    opts.regionFallback = {"/NA/"};
+    CHECK_THROWS_AS(reconstruct(r, out.string(), opts), std::runtime_error);
+
+    // The primary's resumable bytes survive untouched...
+    REQUIRE(fs::exists(out / "Data" / "x.bin.part"));
+    {
+        std::ifstream f(out / "Data" / "x.bin.part", std::ios::binary);
+        std::string got((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+        CHECK(got == "PARTIAL");
+    }
+    // ...and the fallback's own scratch file is never left behind.
+    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part.fb"));
+
+    fs::remove_all(root);
+}
