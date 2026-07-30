@@ -63,7 +63,12 @@ struct ReconstructOpts
 {
         const Torrent* torrent = nullptr;     ///< M2.4: piece verification.
         Journal* journal = nullptr;           ///< M2.6: resume journal.
-        std::vector<std::string> regionFallback; ///< M2.6: NA/EU failover.
+        // NOTE: there was a regionFallback member here (NA/EU failover). It was
+        // removed: a fallback copy cannot be validated at the fetch layer (Data
+        // artifacts carry no MD5, and the other region's authentic size lives
+        // only in that region's manifest), so it could accept an unverified
+        // substitute for a genuinely region-specific archive. See the comment
+        // on the PlainUrl download in reconstruct().
 };
 
 /// Replace the first occurrence of substring `from` in url with `to`. If
@@ -75,10 +80,6 @@ std::string swap_base(const std::string& url, const std::string& from,
 /// url with toSeg (e.g. "/NA/" or "/EU/"), preserving the build segment.
 /// Returns url unchanged if no region code is found.
 std::string swap_region(const std::string& url, const std::string& toSeg);
-
-/// Region segments to try if the primary region fails: "EU" yields {"/NA/"},
-/// "NA" yields {"/EU/"}, else empty.
-std::vector<std::string> region_fallbacks(const std::string& region);
 
 /// Return the CDN region path segment for the given region:
 ///   "NA" -> "/NA/"

@@ -34,17 +34,58 @@
 
 namespace wcr
 {
+/// Identity of the run that produced a journal. A resume is only sound when
+/// the new run would fetch the SAME bytes from the SAME place under the SAME
+/// checks. Every input that changes any of those belongs here.
+///
+/// Region matters because same-named archives genuinely differ between CDN
+/// regions (MoP's Updates/wow-0-18414-Win-final.MPQ is 21729424 in EU and
+/// 21729944 in NA). Resuming an interrupted EU download under --region NA would
+/// append NA bytes at the EU partial's offset and land on exactly the NA
+/// expected size, so the size check -- the only check a Data artifact has --
+/// would accept a file spliced from two regions.
+///
+/// `pieces` records whether the run had a torrent: a journal entry means it
+/// "passed ALL integrity checks", but a run without --tfil never ran piece
+/// verification, so its entries must not let a --tfil run skip those files.
+struct RunStamp
+{
+    std::string region;   ///< Selected CDN region ("EU"/"NA").
+    std::string manifest; ///< Partial-manifest name the sizes came from.
+    bool pieces = false;  ///< Whether piece verification was in force.
+
+    bool operator==(const RunStamp& o) const
+    {
+        return region == o.region && manifest == o.manifest &&
+               pieces == o.pieces;
+    }
+};
+
 /// On-disk resume ledger. Each line of the journal file is one relPath that
 /// has passed ALL integrity checks. The file lives at outDir/.wcr-journal.
 struct Journal
 {
     std::string path;           ///< Full path to the .wcr-journal file.
     std::set<std::string> done; ///< Set of relPaths already completed.
+    RunStamp stamp;             ///< Identity of the run that owns these lines.
+    bool stamped = false;       ///< Whether the file carried a stamp at all.
 };
 
 /// Load the journal at outDir/.wcr-journal. A missing file yields an empty,
 /// ready-to-use Journal whose path still points at where it will be written.
 Journal load_journal(const std::string& outDir);
+
+/// Load the journal only if it belongs to a run matching `want`. When the
+/// on-disk stamp differs -- or is absent, as in a journal written before stamps
+/// existed, whose provenance cannot be established -- the stale run is
+/// discarded via discard_stale_run() and an empty journal carrying `want` is
+/// returned. Fail-closed: an unrecognised journal is never resumed.
+Journal load_journal(const std::string& outDir, const RunStamp& want);
+
+/// Remove the journal and every stale partial download (*.part, and the
+/// *.part.fb scratch left by the removed region-failover code) under outDir, so
+/// nothing from the previous run can be resumed into or mistaken for this one.
+void discard_stale_run(const std::string& outDir);
 
 /// Return true if relPath is already recorded as done in journal j.
 bool is_done(const Journal& j, const std::string& relPath);

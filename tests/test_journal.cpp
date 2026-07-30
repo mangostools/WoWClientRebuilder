@@ -24,7 +24,7 @@
 
 /**
  * @file test_journal.cpp
- * @brief Resume journal + region failover unit tests.
+ * @brief Resume journal + region-bound resume state unit tests.
  */
 
 #include "doctest.h"
@@ -33,6 +33,8 @@
 #include "recipe.h"
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
+#include <string>
 
 TEST_CASE("journal_round_trip")
 {
@@ -80,14 +82,6 @@ TEST_CASE("region_swap")
                            "/NA/") ==
           "http://dist/plain/Data/foo.MPQ");
 
-    // region_fallbacks returns the opposite region's short segment.
-    std::vector<std::string> euFb = wcr::region_fallbacks("EU");
-    REQUIRE(euFb.size() == 1);
-    CHECK(euFb[0] == "/NA/");
-    std::vector<std::string> naFb = wcr::region_fallbacks("NA");
-    REQUIRE(naFb.size() == 1);
-    CHECK(naFb[0] == "/EU/");
-    CHECK(wcr::region_fallbacks("ZZ").empty());
 }
 
 TEST_CASE("journal_skip_done_file")
@@ -299,31 +293,150 @@ TEST_CASE("journal_exists and clear_journal manage the .wcr-journal file")
     fs::remove_all(dir);
 }
 
-TEST_CASE("region_failover_eu_to_na")
+
+
+
+namespace
+{
+/// Write bytes to p, creating parents.
+void put_bytes(const std::filesystem::path& p, const std::string& s)
+{
+    std::filesystem::create_directories(p.parent_path());
+    std::ofstream f(p, std::ios::binary);
+    f.write(s.data(), static_cast<std::streamsize>(s.size()));
+}
+
+/// Read a whole file as a string ("" if absent).
+std::string get_bytes(const std::filesystem::path& p)
+{
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)),
+                       std::istreambuf_iterator<char>());
+}
+
+wcr::RunStamp stamp_of(const std::string& region, const std::string& manifest,
+                       bool pieces)
+{
+    wcr::RunStamp s;
+    s.region = region;
+    s.manifest = manifest;
+    s.pieces = pieces;
+    return s;
+}
+} // namespace
+
+TEST_CASE("run_stamp_round_trips_and_resumes_an_equivalent_run")
 {
     namespace fs = std::filesystem;
-    fs::path root = fs::temp_directory_path() / "wcr_region_failover";
-    fs::remove_all(root);
-    // Embed "wow-pod-retail" in the path so swap_region can find its anchor.
-    fs::path pod = root / "wow-pod-retail";
-    fs::path na = pod / "NA" / "15050.direct" / "Data";
-    fs::path out = root / "out";
-    fs::create_directories(na);
-    fs::create_directories(out / "Data");
-    // Note: the EU directory is deliberately NOT created.
+    fs::path dir = fs::temp_directory_path() / "wcr_stamp_rt";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
 
+    const wcr::RunStamp want = stamp_of("NA", "wow-18414-NA.mfil", false);
+    wcr::Journal j = wcr::load_journal(dir.string(), want);
+    CHECK(j.done.empty());
+    wcr::mark_done(j, "Data/a.MPQ");
+    wcr::mark_done(j, "Data/b.MPQ");
+
+    // Same run identity -> the journal is honoured.
+    wcr::Journal again = wcr::load_journal(dir.string(), want);
+    CHECK(again.stamped);
+    CHECK(again.stamp == want);
+    CHECK(again.done.size() == 2);
+    CHECK(wcr::is_done(again, "Data/a.MPQ"));
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("run_stamp_mismatch_discards_the_journal_and_stale_partials")
+{
+    // The core of the cross-run splice: an interrupted run under one region
+    // leaves a .part, and resuming the same output dir under another region
+    // would append the new region's bytes at the old offset. The totals then
+    // match the new region's expected size, and a Data artifact has no MD5 to
+    // catch it. So a changed region must discard both journal and partials.
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_stamp_mismatch";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    wcr::Journal eu = wcr::load_journal(
+        dir.string(), stamp_of("EU", "wow-18414-EU.mfil", false));
+    wcr::mark_done(eu, "Data/a.MPQ");
+    put_bytes(dir / "Data" / "big.MPQ.part", "EUPARTIAL");
+    put_bytes(dir / "Data" / "old.MPQ.part.fb", "SCRATCH");
+    put_bytes(dir / "Data" / "keep.MPQ", "FINISHED");
+
+    SUBCASE("region change")
     {
-        std::ofstream f(na / "x.bin", std::ios::binary);
-        const char* bytes = "NAONLY";
-        f.write(bytes, 6);
+        wcr::Journal na = wcr::load_journal(
+            dir.string(), stamp_of("NA", "wow-18414-NA.mfil", false));
+        CHECK(na.done.empty());
+        CHECK(na.stamp.region == "NA");
+        CHECK_FALSE(wcr::journal_exists(dir.string()));
+        CHECK_FALSE(fs::exists(dir / "Data" / "big.MPQ.part"));
+        CHECK_FALSE(fs::exists(dir / "Data" / "old.MPQ.part.fb"));
+        // Completed output is NOT collateral damage.
+        CHECK(get_bytes(dir / "Data" / "keep.MPQ") == "FINISHED");
     }
 
-    // Build a URL that points at the (missing) EU tree but whose region
-    // segment swap_region can rewrite to the existing NA tree.
+    SUBCASE("manifest change at the same region")
+    {
+        wcr::Journal other = wcr::load_journal(
+            dir.string(), stamp_of("EU", "wow-15595-EU.mfil", false));
+        CHECK(other.done.empty());
+        CHECK_FALSE(fs::exists(dir / "Data" / "big.MPQ.part"));
+    }
+
+    SUBCASE("adding --tfil invalidates entries written without piece checks")
+    {
+        // A journal line means "passed ALL integrity checks", but the EU run
+        // above ran none of the piece checks, so its entries must not let a
+        // torrent-verified run skip those files.
+        wcr::Journal withPieces = wcr::load_journal(
+            dir.string(), stamp_of("EU", "wow-18414-EU.mfil", true));
+        CHECK(withPieces.done.empty());
+        CHECK(withPieces.stamp.pieces);
+    }
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("run_stamp_absent_is_fail_closed")
+{
+    // A journal from a build that predates stamping has unknown provenance:
+    // it could have been written under any region. It must not be resumed.
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_stamp_legacy";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    put_bytes(dir / ".wcr-journal", "Data/a.MPQ\nData/b.MPQ\n");
+    put_bytes(dir / "Data" / "a.MPQ.part", "STALE");
+
+    wcr::Journal j = wcr::load_journal(
+        dir.string(), stamp_of("NA", "wow-18414-NA.mfil", false));
+    CHECK(j.done.empty());
+    CHECK_FALSE(fs::exists(dir / "Data" / "a.MPQ.part"));
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("no_cross_region_failover_on_a_missing_primary")
+{
+    // Cross-region failover was removed: a fallback copy cannot be validated
+    // here, so an unreachable primary must fail rather than silently substitute
+    // the other region's bytes.
+    namespace fs = std::filesystem;
+    fs::path root = fs::temp_directory_path() / "wcr_no_failover";
+    fs::remove_all(root);
+    fs::path pod = root / "wow-pod-retail";
+    fs::path out = root / "out";
+    fs::create_directories(out / "Data");
+    // The NA copy exists and the EU copy does not; nothing may reach for NA.
+    put_bytes(pod / "NA" / "15050.direct" / "Data" / "x.bin", "NAONLY");
+
     std::string euUrl = std::string("file:///") +
         (pod / "EU" / "15050.direct" / "Data" / "x.bin").generic_string();
-    CHECK(euUrl.find("wow-pod-retail") != std::string::npos);
-    CHECK(euUrl.find("/EU/15050.direct/") != std::string::npos);
 
     wcr::Recipe r;
     r.version = "4.3.4";
@@ -332,134 +445,64 @@ TEST_CASE("region_failover_eu_to_na")
     a.outName = "Data/x.bin";
     a.source = wcr::Source::PlainUrl;
     a.url = euUrl;
-    a.size = 6; // "NAONLY"
+    a.size = 6;
     r.artifacts.push_back(a);
 
-    wcr::ReconstructOpts opts;
-    opts.regionFallback = {"/NA/"};
-
-    // Primary EU path is missing; failover to NA must succeed.
-    REQUIRE_NOTHROW(reconstruct(r, out.string(), opts));
-
-    {
-        std::ifstream f(out / "Data" / "x.bin", std::ios::binary);
-        std::string got((std::istreambuf_iterator<char>(f)),
-                        std::istreambuf_iterator<char>());
-        CHECK(got == "NAONLY");
-    }
+    CHECK_THROWS_AS(reconstruct(r, out.string(), wcr::ReconstructOpts{}),
+                    std::runtime_error);
+    CHECK_FALSE(fs::exists(out / "Data" / "x.bin"));
 
     fs::remove_all(root);
 }
 
-TEST_CASE("region_failover_does_not_splice_a_stale_part")
+TEST_CASE("cross_run_region_change_cannot_splice_a_partial")
 {
-    // A region switch must not resume the selected region's partial bytes into
-    // the other region's download. Data artifacts carry no MD5, so a spliced
-    // file whose total length happens to match would pass the only check there
-    // is. The stale part here is exactly as long as the shortfall would need to
-    // be, so a resuming implementation produces a size-correct, content-wrong
-    // file and this test fails.
+    // End-to-end form of the cross-run splice, through reconstruct(). The two
+    // regions serve SAME-LENGTH, different-content files, so the size check --
+    // the only check a Data artifact gets -- cannot tell a spliced result
+    // from a clean one. A resumed EU partial would yield "EUEU" + the NA
+    // remainder at exactly the expected length and be accepted.
     namespace fs = std::filesystem;
-    fs::path root = fs::temp_directory_path() / "wcr_failover_splice";
+    fs::path root = fs::temp_directory_path() / "wcr_crossrun_splice";
     fs::remove_all(root);
     fs::path pod = root / "wow-pod-retail";
-    fs::path na = pod / "NA" / "15050.direct" / "Data";
     fs::path out = root / "out";
-    fs::create_directories(na);
     fs::create_directories(out / "Data");
-    // The EU tree is deliberately absent, forcing the NA failover.
+    put_bytes(pod / "EU" / "15050.direct" / "Data" / "x.bin", "EUEUEUEU");
+    put_bytes(pod / "NA" / "15050.direct" / "Data" / "x.bin", "NANANANA");
 
-    {
-        std::ofstream f(na / "x.bin", std::ios::binary);
-        const char* bytes = "NANANANA";
-        f.write(bytes, 8);
-    }
-    // A stale partial download from the primary region, 3 bytes long.
-    {
-        std::ofstream f(out / "Data" / "x.bin.part", std::ios::binary);
-        const char* bytes = "EUE";
-        f.write(bytes, 3);
-    }
+    // State left by an interrupted EU run: a stamped journal and a 4-byte
+    // partial holding EU bytes.
+    const wcr::RunStamp euStamp = stamp_of("EU", "wow-15595-EU.mfil", false);
+    wcr::Journal euRun = wcr::load_journal(out.string(), euStamp);
+    wcr::mark_done(euRun, "Data/other.bin");
+    put_bytes(out / "Data" / "x.bin.part", "EUEU");
 
-    std::string euUrl = std::string("file:///") +
-        (pod / "EU" / "15050.direct" / "Data" / "x.bin").generic_string();
-
+    // Now the user re-runs the SAME output dir with --region NA.
     wcr::Recipe r;
     r.version = "4.3.4";
     r.build = "15595";
     wcr::Artifact a;
     a.outName = "Data/x.bin";
     a.source = wcr::Source::PlainUrl;
-    a.url = euUrl;
-    a.size = 8; // "NANANANA"
-    r.artifacts.push_back(a);
-
-    wcr::ReconstructOpts opts;
-    opts.regionFallback = {"/NA/"};
-    REQUIRE_NOTHROW(reconstruct(r, out.string(), opts));
-
-    {
-        std::ifstream f(out / "Data" / "x.bin", std::ios::binary);
-        std::string got((std::istreambuf_iterator<char>(f)),
-                        std::istreambuf_iterator<char>());
-        // Whole fallback content, with none of the stale primary bytes.
-        CHECK(got == "NANANANA");
-    }
-    // The scratch part files must not survive a successful reconstruct.
-    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part"));
-    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part.fb"));
-
-    fs::remove_all(root);
-}
-
-TEST_CASE("region_failover_keeps_the_primary_part_when_every_region_fails")
-{
-    // Deleting the primary's partial bytes just to attempt a fallback would
-    // throw away resumable progress on a multi-GB Data file. When every region
-    // fails the artifact fails too, but the primary .part must survive intact
-    // so the next run can resume it.
-    namespace fs = std::filesystem;
-    fs::path root = fs::temp_directory_path() / "wcr_failover_keep_part";
-    fs::remove_all(root);
-    fs::path pod = root / "wow-pod-retail";
-    fs::path out = root / "out";
-    fs::create_directories(pod);
-    fs::create_directories(out / "Data");
-    // Neither the EU nor the NA tree exists, so both attempts fail.
-
-    {
-        std::ofstream f(out / "Data" / "x.bin.part", std::ios::binary);
-        const char* bytes = "PARTIAL";
-        f.write(bytes, 7);
-    }
-
-    std::string euUrl = std::string("file:///") +
-        (pod / "EU" / "15050.direct" / "Data" / "x.bin").generic_string();
-
-    wcr::Recipe r;
-    r.version = "4.3.4";
-    r.build = "15595";
-    wcr::Artifact a;
-    a.outName = "Data/x.bin";
-    a.source = wcr::Source::PlainUrl;
-    a.url = euUrl;
+    a.url = std::string("file:///") +
+        (pod / "NA" / "15050.direct" / "Data" / "x.bin").generic_string();
     a.size = 8;
     r.artifacts.push_back(a);
 
-    wcr::ReconstructOpts opts;
-    opts.regionFallback = {"/NA/"};
-    CHECK_THROWS_AS(reconstruct(r, out.string(), opts), std::runtime_error);
+    const wcr::RunStamp naStamp = stamp_of("NA", "wow-15595-NA.mfil", false);
+    wcr::Journal naRun = wcr::load_journal(out.string(), naStamp);
+    // The stale EU partial is gone before a single byte is fetched.
+    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part"));
+    CHECK(naRun.done.empty());
 
-    // The primary's resumable bytes survive untouched...
-    REQUIRE(fs::exists(out / "Data" / "x.bin.part"));
-    {
-        std::ifstream f(out / "Data" / "x.bin.part", std::ios::binary);
-        std::string got((std::istreambuf_iterator<char>(f)),
-                        std::istreambuf_iterator<char>());
-        CHECK(got == "PARTIAL");
-    }
-    // ...and the fallback's own scratch file is never left behind.
-    CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part.fb"));
+    wcr::ReconstructOpts opts;
+    opts.journal = &naRun;
+    REQUIRE_NOTHROW(reconstruct(r, out.string(), opts));
+
+    // Whole NA content. "EUEUNANA" is the splice this guards against: it is
+    // also 8 bytes, so only the content assertion can catch it.
+    CHECK(get_bytes(out / "Data" / "x.bin") == "NANANANA");
 
     fs::remove_all(root);
 }

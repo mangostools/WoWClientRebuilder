@@ -62,7 +62,6 @@ TEST_CASE("ReconstructOpts default-constructs with null torrent/journal")
     wcr::ReconstructOpts opts;
     CHECK(opts.torrent == nullptr);
     CHECK(opts.journal == nullptr);
-    CHECK(opts.regionFallback.empty());
 }
 
 namespace

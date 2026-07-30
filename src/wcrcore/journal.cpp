@@ -33,6 +33,44 @@
 
 namespace wcr
 {
+namespace
+{
+/// Header key prefix for the stamp lines. '#' can never begin a manifest
+/// relPath, so stamped and unstamped lines are unambiguous.
+const char* kStampPrefix = "#wcr ";
+const std::string::size_type kStampLen = 5; // strlen(kStampPrefix)
+
+/// Parse "#wcr <key>=<value>" into the stamp. Unknown keys are ignored so a
+/// journal written by a newer build degrades to "no usable stamp" rather than
+/// being misread.
+void apply_stamp_line(const std::string& line, RunStamp& s, bool& sawAny)
+{
+    const std::string body = line.substr(kStampLen);
+    std::string::size_type eq = body.find('=');
+    if (eq == std::string::npos)
+    {
+        return;
+    }
+    const std::string key = body.substr(0, eq);
+    const std::string val = body.substr(eq + 1);
+    if (key == "region")
+    {
+        s.region = val;
+        sawAny = true;
+    }
+    else if (key == "manifest")
+    {
+        s.manifest = val;
+        sawAny = true;
+    }
+    else if (key == "pieces")
+    {
+        s.pieces = (val == "1");
+        sawAny = true;
+    }
+}
+} // namespace
+
 Journal load_journal(const std::string& outDir)
 {
     Journal j;
@@ -43,18 +81,80 @@ Journal load_journal(const std::string& outDir)
         return j;
     }
     std::string line;
+    bool sawStamp = false;
     while (std::getline(in, line))
     {
         if (!line.empty() && line.back() == '\r')
         {
             line.pop_back();
         }
-        if (!line.empty())
+        if (line.empty())
         {
-            j.done.insert(line);
+            continue;
+        }
+        if (line.compare(0, kStampLen, kStampPrefix) == 0)
+        {
+            apply_stamp_line(line, j.stamp, sawStamp);
+            continue;
+        }
+        j.done.insert(line);
+    }
+    j.stamped = sawStamp;
+    return j;
+}
+
+Journal load_journal(const std::string& outDir, const RunStamp& want)
+{
+    Journal j = load_journal(outDir);
+    // An unstamped journal predates stamping (or was hand-made): its provenance
+    // cannot be established, so it is discarded rather than trusted.
+    if (j.done.empty() && !j.stamped)
+    {
+        j.stamp = want;
+        return j;
+    }
+    if (j.stamped && j.stamp == want)
+    {
+        return j;
+    }
+    discard_stale_run(outDir);
+    Journal fresh;
+    fresh.path = j.path;
+    fresh.stamp = want;
+    return fresh;
+}
+
+void discard_stale_run(const std::string& outDir)
+{
+    std::error_code ec;
+    std::filesystem::remove(outDir + "/.wcr-journal", ec);
+    // Sweep partials so the next run cannot resume into bytes fetched under a
+    // different region/manifest. Iterate non-throwing: the output dir is a
+    // user-typed path and may be unreadable in places.
+    std::filesystem::recursive_directory_iterator it(
+        outDir, std::filesystem::directory_options::skip_permission_denied, ec);
+    if (ec)
+    {
+        return;
+    }
+    std::filesystem::recursive_directory_iterator end;
+    for (; it != end; it.increment(ec))
+    {
+        if (ec)
+        {
+            return;
+        }
+        const std::string p = it->path().string();
+        const bool isPart = p.size() >= 5 && p.compare(p.size() - 5, 5,
+                                                       ".part") == 0;
+        const bool isFb = p.size() >= 8 && p.compare(p.size() - 8, 8,
+                                                     ".part.fb") == 0;
+        if (isPart || isFb)
+        {
+            std::error_code rm;
+            std::filesystem::remove(it->path(), rm);
         }
     }
-    return j;
 }
 
 bool is_done(const Journal& j, const std::string& relPath)
@@ -66,7 +166,19 @@ void mark_done(Journal& j, const std::string& relPath)
 {
     if (j.done.insert(relPath).second)
     {
+        // Write the stamp header the first time the file is created, so every
+        // journal on disk identifies the run that owns it.
+        std::error_code ec;
+        const bool fresh = !std::filesystem::exists(j.path, ec);
         std::ofstream out(j.path, std::ios::binary | std::ios::app);
+        if (fresh && !j.stamp.region.empty())
+        {
+            out << kStampPrefix << "region=" << j.stamp.region << "\n"
+                << kStampPrefix << "manifest=" << j.stamp.manifest << "\n"
+                << kStampPrefix << "pieces=" << (j.stamp.pieces ? "1" : "0")
+                << "\n";
+            j.stamped = true;
+        }
         out << relPath << "\n";
     }
 }

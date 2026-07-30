@@ -101,6 +101,25 @@ static Recipe build_run_recipe(const RunParams& params)
     return run;
 }
 
+/// Identify this run for the resume journal: the region and the
+/// partial-manifest name the artifact sizes come from, plus whether piece
+/// verification is in force. Recomputed from the recipe (no network); the
+/// manifest name also distinguishes versions, so a 4.3.4 and a 5.4.8 run in one
+/// output directory never resume each other.
+static wcr::RunStamp run_stamp(const RunParams& params, bool haveTorrent)
+{
+    wcr::RunStamp s;
+    s.region = params.region;
+    s.pieces = haveTorrent;
+    if (const Recipe* base = find_recipe(params.version))
+    {
+        const std::string ptr =
+            pointer_text_for_region(*base, params.region);
+        s.manifest = parse_pointer(ptr).partialName;
+    }
+    return s;
+}
+
 /// On the interactive (double-click) path, keep the console open so the user
 /// can read the result before the window closes.
 static void pause_if_interactive(bool interactive)
@@ -199,9 +218,13 @@ int main(int argc, char** argv)
         {
             opts.torrent = &torrent;
         }
-        wcr::Journal journal = wcr::load_journal(params.outDir);
+        // Resume only a journal written by an equivalent run. A region or
+        // manifest change means the same relPaths can name different bytes, and
+        // adding --tfil means checks the old run never ran, so in those cases
+        // the stale journal and its partials are discarded instead of resumed.
+        wcr::Journal journal =
+            wcr::load_journal(params.outDir, run_stamp(params, haveTorrent));
         opts.journal = &journal;
-        opts.regionFallback = wcr::region_fallbacks(params.region);
         long long total = wcr::total_bytes(run.artifacts);
         long long avail = wcr::free_space(params.outDir);
         if (interactive)

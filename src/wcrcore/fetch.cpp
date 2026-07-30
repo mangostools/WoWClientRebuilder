@@ -87,19 +87,6 @@ std::string swap_region(const std::string& url, const std::string& toSeg)
     return url;
 }
 
-std::vector<std::string> region_fallbacks(const std::string& region)
-{
-    if (region == "EU")
-    {
-        return {"/NA/"};
-    }
-    if (region == "NA")
-    {
-        return {"/EU/"};
-    }
-    return {};
-}
-
 std::string region_segment(const std::string& region)
 {
     return (region == "NA") ? "/NA/" : "/EU/";
@@ -315,63 +302,30 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                     }
                     // File missing or wrong size — fall through and re-download.
                 }
+                // NOTE: there is deliberately no cross-region failover here.
+                // Substituting the other region's copy cannot be validated at
+                // this layer: Data artifacts carry no MD5, the fallback's
+                // authentic size lives only in that region's manifest, and
+                // several archives genuinely differ per region (MoP's
+                // Updates/wow-0-18414-Win-final.MPQ). A fallback that happened
+                // to match the selected region's expected length would be
+                // accepted without anything establishing byte-identity, so a
+                // pod outage now surfaces as a clean failure the user can
+                // retry rather than as a possibly-wrong client.
                 try
                 {
                     download_file(a.url, part, popts);
                 }
                 catch (const std::exception&)
                 {
-                    bool recovered = false;
-                    for (const std::string& fb : opts.regionFallback)
+                    if (a.optional)
                     {
-                        // A region switch must never resume the selected
-                        // region's partial bytes: the same-named archive can
-                        // differ between regions (MoP's
-                        // Updates/wow-0-18414-Win-final.MPQ), Data artifacts
-                        // carry no MD5, and a file spliced from two regions
-                        // would still pass the size check if the lengths happen
-                        // to agree. So each fallback downloads whole into its
-                        // OWN part file, and the primary's part is only
-                        // discarded once a fallback has completed. That keeps
-                        // an interrupted primary download resumable on a later
-                        // run instead of throwing its progress away.
-                        std::string fbPart = part + ".fb";
-                        std::error_code fbec;
-                        std::filesystem::remove(fbPart, fbec);
-                        DownloadOpts fopts = popts;
-                        fopts.resume = false;
-                        try
-                        {
-                            download_file(swap_region(a.url, fb), fbPart,
-                                          fopts);
-                            std::filesystem::remove(part, fbec);
-                            std::filesystem::rename(fbPart, part);
-                            recovered = true;
-                            break;
-                        }
-                        catch (const std::exception&)
-                        {
-                            // Try the next fallback region, again from scratch.
-                            // Note fopts.expected_size is still the SELECTED
-                            // region's size, so a fallback whose archive is
-                            // region-specific fails this size check rather than
-                            // yielding an unvalidated file: the fallback's
-                            // authentic size is only known from that region's
-                            // manifest, which this layer does not have.
-                            std::filesystem::remove(fbPart, fbec);
-                        }
+                        std::error_code rec;
+                        std::filesystem::remove(part, rec);
+                        skipped = true;
+                        break;
                     }
-                    if (!recovered)
-                    {
-                        if (a.optional)
-                        {
-                            std::error_code rec;
-                            std::filesystem::remove(part, rec);
-                            skipped = true;
-                            break;
-                        }
-                        throw;
-                    }
+                    throw;
                 }
                 // Only load bytes into RAM when an MD5 must be verified.
                 // Data files carry no MD5, so multi-GB files stay on disk and
