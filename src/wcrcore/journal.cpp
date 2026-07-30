@@ -42,10 +42,23 @@ namespace
 const char* kStampPrefix = "#wcr ";
 const std::string::size_type kStampLen = 5; // strlen(kStampPrefix)
 
+/// Bit per stamp key, so load_journal can demand a COMPLETE header. A header
+/// truncated by a crash mid-write (e.g. region+manifest present, torrent line
+/// missing) must not count as stamped: the absent torrent key would read as
+/// "no torrent" and wrongly match a no-torrent run.
+enum StampKey
+{
+    kSawRegion = 1,
+    kSawManifest = 2,
+    kSawRecipe = 4,
+    kSawTorrent = 8,
+    kSawAll = kSawRegion | kSawManifest | kSawRecipe | kSawTorrent
+};
+
 /// Parse "#wcr <key>=<value>" into the stamp. Unknown keys are ignored so a
 /// journal written by a newer build degrades to "no usable stamp" rather than
 /// being misread.
-void apply_stamp_line(const std::string& line, RunStamp& s, bool& sawAny)
+void apply_stamp_line(const std::string& line, RunStamp& s, int& sawKeys)
 {
     const std::string body = line.substr(kStampLen);
     std::string::size_type eq = body.find('=');
@@ -58,17 +71,22 @@ void apply_stamp_line(const std::string& line, RunStamp& s, bool& sawAny)
     if (key == "region")
     {
         s.region = val;
-        sawAny = true;
+        sawKeys |= kSawRegion;
     }
     else if (key == "manifest")
     {
         s.manifest = val;
-        sawAny = true;
+        sawKeys |= kSawManifest;
+    }
+    else if (key == "recipe")
+    {
+        s.recipeId = val;
+        sawKeys |= kSawRecipe;
     }
     else if (key == "torrent")
     {
         s.torrentId = val;
-        sawAny = true;
+        sawKeys |= kSawTorrent;
     }
 }
 } // namespace
@@ -83,7 +101,7 @@ Journal load_journal(const std::string& outDir)
         return j;
     }
     std::string line;
-    bool sawStamp = false;
+    int sawKeys = 0;
     while (std::getline(in, line))
     {
         if (!line.empty() && line.back() == '\r')
@@ -96,20 +114,25 @@ Journal load_journal(const std::string& outDir)
         }
         if (line.compare(0, kStampLen, kStampPrefix) == 0)
         {
-            apply_stamp_line(line, j.stamp, sawStamp);
+            apply_stamp_line(line, j.stamp, sawKeys);
             continue;
         }
         j.done.insert(line);
     }
-    j.stamped = sawStamp;
+    // Stamped ONLY with the complete header: a partial one (crash mid-write)
+    // must never be trusted, or its missing keys would read as defaults and
+    // could match a run they do not describe.
+    j.stamped = (sawKeys == kSawAll);
     return j;
 }
 
 bool journal_matches(const Journal& j, const RunStamp& want)
 {
-    // A journal with no stamp, or a stamp missing any field, cannot be shown to
-    // describe this run: refuse it rather than guess.
-    if (!j.stamped || j.stamp.region.empty() || j.stamp.manifest.empty())
+    // A journal with no stamp, or an incomplete one, cannot be shown to
+    // describe this run: refuse it rather than guess. (load_journal only sets
+    // `stamped` when the full header was present.)
+    if (!j.stamped || j.stamp.region.empty() || j.stamp.manifest.empty() ||
+        j.stamp.recipeId.empty())
     {
         return false;
     }
@@ -118,6 +141,12 @@ bool journal_matches(const Journal& j, const RunStamp& want)
 
 void write_stamp(Journal& j)
 {
+    // A first run into a brand-new output directory stamps before anything
+    // else exists there, so create the directory here rather than relying on
+    // reconstruct() to have done it.
+    std::error_code dec;
+    std::filesystem::create_directories(
+        std::filesystem::path(j.path).parent_path(), dec);
     std::ofstream out(j.path, std::ios::binary | std::ios::trunc);
     if (!out)
     {
@@ -125,6 +154,7 @@ void write_stamp(Journal& j)
     }
     out << kStampPrefix << "region=" << j.stamp.region << "\n"
         << kStampPrefix << "manifest=" << j.stamp.manifest << "\n"
+        << kStampPrefix << "recipe=" << j.stamp.recipeId << "\n"
         << kStampPrefix << "torrent=" << j.stamp.torrentId << "\n";
     out.flush();
     if (!out)

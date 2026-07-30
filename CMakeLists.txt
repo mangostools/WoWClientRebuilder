@@ -60,6 +60,11 @@ if(WIN32)
 endif()
 target_link_libraries(wowrebuild PRIVATE wcrcore)
 
+# The unit-test suite is opt-in: a plain configure builds only the tool. Turn
+# on with -DWCR_BUILD_TESTS=ON (CI must pass this explicitly, or its ctest run
+# is an empty no-op that trivially "passes" while testing nothing).
+option(WCR_BUILD_TESTS "Build and register the offline unit-test suite" OFF)
+if(WCR_BUILD_TESTS)
 enable_testing()
 add_executable(wcrtests tests/test_smoke.cpp tests/test_ptch.cpp tests/test_mpq.cpp tests/test_download.cpp tests/test_md5.cpp tests/test_acceptance.cpp tests/test_zip.cpp tests/test_recipe.cpp tests/test_fetch.cpp tests/test_mfil.cpp tests/test_datarecipe.cpp tests/test_args.cpp tests/test_assemble.cpp tests/test_sha1.cpp tests/test_bencode.cpp tests/test_pieces.cpp tests/test_fetch_pieces.cpp tests/test_wtf.cpp tests/test_journal.cpp tests/test_progress.cpp tests/test_interactive.cpp)
 target_include_directories(wcrtests PRIVATE dep/doctest src/wcrcore dep/StormLib/src dep/miniz)
@@ -137,6 +142,11 @@ add_test(NAME run_stamp_matches COMMAND wcrtests "-tc=journal_matches_is_fail_cl
 add_test(NAME run_stamp_discard COMMAND wcrtests "-tc=discard_stale_run_removes_exactly_the_named_paths")
 add_test(NAME run_stamp_discard_fails COMMAND wcrtests "-tc=discard_stale_run_throws_when_a_partial_survives")
 add_test(NAME run_stamp_part_paths COMMAND wcrtests "-tc=artifact_part_paths_mirrors_reconstruct_naming")
+add_test(NAME run_stamp_recipe_id COMMAND wcrtests "-tc=recipe_id_binds_the_full_download_identity")
+add_test(NAME run_stamp_unstamped_core COMMAND wcrtests "-tc=reconstruct_ignores_an_unstamped_journal")
+add_test(NAME run_stamp_failure_keeps COMMAND wcrtests "-tc=reconstruct_failure_keeps_the_journal_for_resume")
+add_test(NAME run_stamp_foreign_journal COMMAND wcrtests "-tc=reconstruct_distrusts_a_foreign_stamped_journal")
+add_test(NAME run_stamp_foreign_no_write COMMAND wcrtests "-tc=reconstruct_never_writes_into_a_foreign_journal")
 add_test(NAME run_stamp_no_crossrun_splice COMMAND wcrtests "-tc=cross_run_region_change_cannot_splice_a_partial")
 add_test(NAME region_mpq_size COMMAND wcrtests "-tc=apply_region_to_recipe: per-region MPQ size overrides*")
 add_test(NAME region_manifest_pointer COMMAND wcrtests "-tc=pointer_text_for_region: fetch and write*")
@@ -154,6 +164,7 @@ add_test(NAME progress_render_zero_total COMMAND wcrtests "-tc=render_progress: 
 add_test(NAME progress_render_speed_positive COMMAND wcrtests "-tc=render_progress: positive speed appends rate with /s suffix")
 add_test(NAME progress_render_speed_negative COMMAND wcrtests "-tc=render_progress: negative speed omits rate entirely")
 add_test(NAME progress_render_speed_zero COMMAND wcrtests "-tc=render_progress: zero speed shows 0 B/s")
+endif() # WCR_BUILD_TESTS
 
 # ---------------------------------------------------------------------------
 # Install rules — produces a self-contained WoWClientRebuilder_install layout

@@ -134,27 +134,65 @@ std::vector<std::string> artifact_part_paths(const Recipe& r,
                                              const std::string& outDir)
 {
     // Mirrors the `part = dst + ".part"` naming used by reconstruct() below;
-    // the .fb sibling is legacy scratch from the removed region failover.
+    // the .fb sibling is legacy scratch from the removed region failover. The
+    // root-level source archives are included too: download_file resumes them
+    // in place, so a stale one from an incompatible run must not survive
+    // either (MoP's final update MPQ genuinely differs per region).
     std::vector<std::string> out;
-    out.reserve(r.artifacts.size() * 2);
+    out.reserve(r.artifacts.size() * 2 + r.mpqs.size() + r.zips.size());
     for (const Artifact& a : r.artifacts)
     {
         const std::string dst = outDir + "/" + a.outName;
         out.push_back(dst + ".part");
         out.push_back(dst + ".part.fb");
     }
+    for (const MpqSource& m : r.mpqs)
+    {
+        out.push_back(outDir + "/" +
+                      m.url.substr(m.url.find_last_of('/') + 1));
+    }
+    for (const ZipSource& z : r.zips)
+    {
+        out.push_back(outDir + "/" +
+                      z.url.substr(z.url.find_last_of('/') + 1));
+    }
     return out;
+}
+
+std::string recipe_id(const Recipe& r)
+{
+    // Field separators keep adjacent values from colliding ("a"+"bc" vs
+    // "ab"+"c"). Sizes participate so a manifest revision that changes only a
+    // byte count still changes the digest.
+    std::string ident;
+    for (const MpqSource& m : r.mpqs)
+    {
+        ident += "M|" + m.url + "|" + std::to_string(m.size) + "\n";
+    }
+    for (const ZipSource& z : r.zips)
+    {
+        ident += "Z|" + z.url + "\n";
+    }
+    for (const Artifact& a : r.artifacts)
+    {
+        ident += "A|" + a.outName + "|" + std::to_string(a.size) + "|" +
+                 a.url + "|" + a.md5 + "\n";
+    }
+    return md5_hex(Bytes(ident.begin(), ident.end()));
 }
 
 void remove_build_scratch(const std::string& outDir,
                           const std::vector<std::string>& sourceFiles)
 {
+    // Never the journal here: this also runs from reconstruct()'s failure
+    // path, where the journal and the .part files must survive so the next
+    // run can prove the partials are its own and resume them. The journal is
+    // removed explicitly on the full-success path only.
     std::error_code ec;
     for (const std::string& f : sourceFiles)
     {
         std::filesystem::remove(outDir + "/" + f, ec);
     }
-    std::filesystem::remove(outDir + "/.wcr-journal", ec);
 }
 
 namespace
@@ -184,6 +222,17 @@ void reconstruct(const Recipe& r, const std::string& outDir,
     std::map<std::string, std::unique_ptr<MpqArchive>> mpqCache;
     int reportSizeChecked = 0;
     long long reportTotalBytes = 0;
+
+    // A journal may authorise skips and .part resumption ONLY when its stamp
+    // provably describes THIS reconstruction. Region/manifest/torrent are the
+    // orchestrator's to check (journal_matches), but the recipe digest can and
+    // must be verified right here: a stamped journal from different work
+    // handed in by a library caller would otherwise authorise correct-size
+    // skips, and its partials would be resumed with this recipe's bytes.
+    // Untrusted => nothing is skipped and every download starts from byte 0,
+    // overwriting any stale .part instead of appending to it.
+    const bool journalTrusted = opts.journal && opts.journal->stamped &&
+                                opts.journal->stamp.recipeId == recipe_id(r);
 
     try
     {
@@ -292,10 +341,14 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                 std::filesystem::create_directories(
                     std::filesystem::path(dst).parent_path());
                 DownloadOpts popts;
-                popts.resume = true;
+                // Resume only partials this run can prove are its own (see
+                // journalTrusted above); resume=false opens "wb" and
+                // overwrites, so a foreign .part never receives appended
+                // bytes.
+                popts.resume = journalTrusted;
                 popts.expected_size = a.size;
                 popts.progress_label = a.outName;
-                if (opts.journal && is_done(*opts.journal, a.outName))
+                if (journalTrusted && is_done(*opts.journal, a.outName))
                 {
                     // Only skip if the destination file is actually on disk.
                     // When a size is known, also confirm the file size matches
@@ -366,7 +419,11 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                         throw;
                     }
                 }
-                if (opts.journal && !skipped)
+                // Trusted journals only, for WRITES as much as reads: a
+                // foreign journal must never gain completion lines from this
+                // recipe, or a later run matching the FOREIGN stamp would
+                // skip a same-sized file this recipe produced.
+                if (journalTrusted && !skipped)
                 {
                     markPending = true;
                 }
@@ -434,7 +491,7 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         printf("  %-28s %lld bytes  [%s]\n", a.outName.c_str(), actualSize,
                a.md5.c_str());
         reportTotalBytes += actualSize;
-        if (markPending && opts.journal)
+        if (markPending && journalTrusted)
         {
             mark_done(*opts.journal, a.outName);
         }
@@ -459,11 +516,17 @@ void reconstruct(const Recipe& r, const std::string& outDir,
     // This is only reached after the artifact loop completes, i.e. on FULL
     // success — any failed/interrupted artifact throws earlier and never gets
     // here, so the journal has nothing left to resume and is safe to remove.
+    // (The journal is removed HERE and only here; the failure path keeps it so
+    // the next run can resume its partials.)
     // Close the MPQ handles FIRST: while an MpqArchive is open, StormLib keeps
     // the source .MPQ open and Windows refuses to delete an open file (the
     // remove fails silently via error_code), stranding the scratch in the root.
     mpqCache.clear();
     remove_build_scratch(outDir, mpqSourceFiles);
+    {
+        std::error_code jec;
+        std::filesystem::remove(outDir + "/.wcr-journal", jec);
+    }
 
     int reportPieceVerified = (opts.torrent != nullptr) ? reportSizeChecked : 0;
     printf("\n=== Reconstruction complete ===\n");

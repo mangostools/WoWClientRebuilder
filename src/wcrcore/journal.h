@@ -46,6 +46,14 @@ namespace wcr
 /// expected size, so the size check -- the only check a Data artifact has --
 /// would accept a file spliced from two regions.
 ///
+/// `recipeId` (see recipe_id in fetch.h) digests the assembled run recipe's
+/// full download identity -- every artifact name, size and URL plus the MPQ and
+/// zip sources -- so it also encodes mode, locale selection, cinematics and
+/// version. That closes stale-partial laundering: a matching stamp implies the
+/// IDENTICAL artifact set, and every stamp write is preceded by a discard that
+/// enumerated that set's partials, so any .part present under a matching stamp
+/// was produced by an equivalent run.
+///
 /// `torrentId` identifies WHICH torrent verified the pieces, not merely that
 /// one was supplied: a journal entry means it "passed ALL integrity checks",
 /// so two different --tfil files must not stamp alike, or entries written
@@ -55,12 +63,13 @@ struct RunStamp
 {
     std::string region;    ///< Selected CDN region ("EU"/"NA").
     std::string manifest;  ///< Partial-manifest name the sizes came from.
+    std::string recipeId;  ///< Digest of the assembled recipe (recipe_id).
     std::string torrentId; ///< Identity of the .tfil, or "" for none.
 
     bool operator==(const RunStamp& o) const
     {
         return region == o.region && manifest == o.manifest &&
-               torrentId == o.torrentId;
+               recipeId == o.recipeId && torrentId == o.torrentId;
     }
 };
 
@@ -86,7 +95,9 @@ Journal load_journal(const std::string& outDir);
 /// and neither does a journal missing any stamp field.
 bool journal_matches(const Journal& j, const RunStamp& want);
 
-/// Write j's stamp to a fresh journal file, replacing any existing one. Call
+/// Write j's stamp to a fresh journal file, replacing any existing one and
+/// creating the parent directory if needed (on a first run into a new output
+/// directory the stamp is written before anything else exists there). Call
 /// once the run is committed, BEFORE the first download: otherwise an
 /// interruption during the very first artifact leaves partials on disk with
 /// no journal to identify which run produced them, and the next run --
