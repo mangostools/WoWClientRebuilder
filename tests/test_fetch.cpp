@@ -62,7 +62,6 @@ TEST_CASE("ReconstructOpts default-constructs with null torrent/journal")
     wcr::ReconstructOpts opts;
     CHECK(opts.torrent == nullptr);
     CHECK(opts.journal == nullptr);
-    CHECK(opts.regionFallback.empty());
 }
 
 namespace
@@ -383,8 +382,12 @@ TEST_CASE("PlainUrl wrong-md5 throws and removes .part file via the shared catch
     CHECK_FALSE(std::filesystem::exists(out + "/r6.bin.part"));
 }
 
-TEST_CASE("remove_build_scratch deletes source MPQs + journal, ignores absent")
+TEST_CASE("remove_build_scratch deletes source MPQs, spares the journal")
 {
+    // The journal is deliberately NOT scratch: this helper also runs from
+    // reconstruct()'s failure path, where the journal must survive so the
+    // next run can prove the partials are its own and resume them. Only the
+    // full-success path removes the journal (and does so itself).
     namespace fs = std::filesystem;
     std::string dir = (fs::temp_directory_path() / "wcr_scratch_test").string();
     fs::create_directories(dir);
@@ -399,7 +402,7 @@ TEST_CASE("remove_build_scratch deletes source MPQs + journal, ignores absent")
         dir, {"base-Win.MPQ", "wow-0-18414-Win-final.MPQ"});
     CHECK_FALSE(fs::exists(dir + "/base-Win.MPQ"));
     CHECK_FALSE(fs::exists(dir + "/wow-0-18414-Win-final.MPQ"));
-    CHECK_FALSE(fs::exists(dir + "/.wcr-journal"));
+    CHECK(fs::exists(dir + "/.wcr-journal"));
     CHECK(fs::exists(dir + "/Wow.exe"));
     fs::remove_all(dir);
 }

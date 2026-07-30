@@ -35,6 +35,7 @@
 #include "recipe.h"
 #include "fetch.h"
 #include "journal.h"
+#include "md5.h"
 #include "bytes.h"
 #include "wtf.h"
 #include "bencode.h"
@@ -101,6 +102,35 @@ static Recipe build_run_recipe(const RunParams& params)
     return run;
 }
 
+/// Identify this run for the resume journal. `run` must be the fully assembled
+/// recipe this run will reconstruct: recipe_id(run) digests every source and
+/// artifact (name, size, URL), so the stamp changes with version, region,
+/// mode, locale selection and cinematics -- a matching stamp implies the
+/// identical artifact set. `tfilBytes` are the .tfil bytes actually parsed for
+/// piece verification (empty = none); hashing the SAME buffer that was parsed
+/// leaves no gap for the file to change between the two reads.
+static wcr::RunStamp run_stamp(const RunParams& params, const Recipe& run,
+                               const wcr::Bytes& tfilBytes)
+{
+    wcr::RunStamp s;
+    s.region = params.region;
+    s.recipeId = wcr::recipe_id(run);
+    // WHICH torrent, not merely whether one was given: two different .tfil
+    // files carry different piece hashes, so entries completed under one must
+    // not be skipped by a run using the other.
+    if (!tfilBytes.empty())
+    {
+        s.torrentId = wcr::md5_hex(tfilBytes);
+    }
+    if (const Recipe* base = find_recipe(params.version))
+    {
+        const std::string ptr =
+            pointer_text_for_region(*base, params.region);
+        s.manifest = parse_pointer(ptr).partialName;
+    }
+    return s;
+}
+
 /// On the interactive (double-click) path, keep the console open so the user
 /// can read the result before the window closes.
 static void pause_if_interactive(bool interactive)
@@ -123,6 +153,7 @@ int main(int argc, char** argv)
 
     const bool interactive = (argc == 1);
     RunParams params;
+    bool forceFresh = false;
     if (interactive)
     {
         // Production locale source: fetch the partial manifest and read its
@@ -160,16 +191,10 @@ int main(int argc, char** argv)
             pause_if_interactive(interactive);
             return 0;
         }
-        // Resume: a previous journal auto-resumes (already-downloaded files are
-        // skipped) UNLESS the user explicitly asks to start fresh. The
-        // destructive clear requires an explicit yes, so EOF/Enter keep it.
-        if (wcr::should_clear_journal(std::cin, std::cout,
-                                      wcr::journal_exists(params.outDir),
-                                      params.outDir,
-                                      wcr::clear_screen_and_print_banner))
-        {
-            wcr::clear_journal(params.outDir);
-        }
+        // The resume-or-start-fresh question is asked LATER (inside the try
+        // block), and only when the on-disk journal actually matches this
+        // run: offering "resume" for state an incompatible stamp would refuse
+        // anyway -- and then discarding it -- would be a broken promise.
     }
     else
     {
@@ -189,9 +214,14 @@ int main(int argc, char** argv)
         Recipe run = build_run_recipe(params);
         wcr::Torrent torrent;
         bool haveTorrent = false;
+        // Read the .tfil ONCE and both parse and hash that same buffer: a
+        // second read could see a different file, stamping entries as
+        // verified by piece hashes that were never actually applied.
+        wcr::Bytes tfilBytes;
         if (!params.tfilPath.empty())
         {
-            torrent = wcr::parse_torrent(wcr::read_file(params.tfilPath));
+            tfilBytes = wcr::read_file(params.tfilPath);
+            torrent = wcr::parse_torrent(tfilBytes);
             haveTorrent = true;
         }
         wcr::ReconstructOpts opts;
@@ -199,9 +229,24 @@ int main(int argc, char** argv)
         {
             opts.torrent = &torrent;
         }
+        // Decide whether the previous run may be resumed, but do not act on
+        // it yet: a stamp mismatch means the same relPaths can name different
+        // bytes (region/version/mode/locales) or different checks (--tfil).
+        // Reading is separate from discarding so nothing is destroyed before
+        // the user has confirmed the run.
+        const wcr::RunStamp want = run_stamp(params, run, tfilBytes);
         wcr::Journal journal = wcr::load_journal(params.outDir);
+        const bool compatible = wcr::journal_matches(journal, want);
+        // Only offer resume-or-fresh for state this run could actually
+        // resume; incompatible state is disclosed at pre-flight instead.
+        if (interactive && compatible)
+        {
+            forceFresh = wcr::should_clear_journal(
+                std::cin, std::cout, true, params.outDir,
+                wcr::clear_screen_and_print_banner);
+        }
+        const bool resumable = compatible && !forceFresh;
         opts.journal = &journal;
-        opts.regionFallback = wcr::region_fallbacks(params.region);
         long long total = wcr::total_bytes(run.artifacts);
         long long avail = wcr::free_space(params.outDir);
         if (interactive)
@@ -213,6 +258,16 @@ int main(int argc, char** argv)
         printf("Reconstructing WoW %s (build %s): %zu artifacts into %s\n",
                run.version.c_str(), run.build.c_str(),
                run.artifacts.size(), params.outDir.c_str());
+        if (!resumable && wcr::journal_exists(params.outDir))
+        {
+            // The user must know BEFORE confirming that stale state will be
+            // destroyed: it is either incompatible with this run (different
+            // region, version, options or torrent) or they chose fresh.
+            printf("NOTE: previous download state in this folder %s and will\n"
+                   "      be discarded when you confirm.\n",
+                   forceFresh ? "is being restarted at your request"
+                              : "is from an incompatible run");
+        }
         if (!wcr::confirm_preflight(total, avail, params.yes,
                                     std::cin, std::cout))
         {
@@ -225,6 +280,22 @@ int main(int argc, char** argv)
             if (interactive)
             {
                 wcr::clear_screen_and_print_banner(std::cout);
+            }
+            if (!resumable)
+            {
+                // Destroy the previous run's state and stamp this one BEFORE
+                // the first download (write_stamp creates the output dir on a
+                // first run). Partials left by an earlier run are swept even
+                // when no journal survives to describe them -- otherwise an
+                // interruption during the very first artifact would leave
+                // unattributable bytes for the next run to resume.
+                wcr::discard_stale_run(
+                    params.outDir,
+                    wcr::artifact_part_paths(run, params.outDir));
+                journal = wcr::Journal{};
+                journal.path = params.outDir + "/.wcr-journal";
+                journal.stamp = want;
+                wcr::write_stamp(journal);
             }
             reconstruct(run, params.outDir, opts);
             if (params.mode == Mode::FullClient)

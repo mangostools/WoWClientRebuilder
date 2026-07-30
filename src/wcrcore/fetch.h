@@ -45,9 +45,11 @@ std::string repair_url(const std::string& base, const std::string& md5);
 void verify_or_throw(const Bytes& data, const std::string& expectedMd5,
                      const std::string& name);
 
-/// Delete the reconstruction scratch from outDir: each named source MPQ
-/// (left in the root after MpqPtch/MpqExtract) plus the .wcr-journal. Missing
-/// files are ignored. Called only after a fully successful reconstruct().
+/// Delete named source-archive scratch (zips / MPQs left in the outDir root)
+/// from outDir. Missing files are ignored. Deliberately does NOT touch the
+/// .wcr-journal: this also runs on the failure path, where the journal and the
+/// .part files must survive so the next run can resume them. The journal is
+/// removed separately on full success.
 void remove_build_scratch(const std::string& outDir,
                           const std::vector<std::string>& sourceFiles);
 
@@ -62,8 +64,19 @@ struct Journal;
 struct ReconstructOpts
 {
         const Torrent* torrent = nullptr;     ///< M2.4: piece verification.
-        Journal* journal = nullptr;           ///< M2.6: resume journal.
-        std::vector<std::string> regionFallback; ///< M2.6: NA/EU failover.
+        /// M2.6: resume journal. Honoured (skips + .part resumption) only when
+        /// stamped AND its stamp's recipeId equals recipe_id of the recipe
+        /// being reconstructed -- reconstruct() verifies that itself, so a
+        /// journal from different work can neither skip nor splice. The
+        /// orchestrator remains responsible for the full journal_matches
+        /// check (region/manifest/torrent) and for discard_stale_run.
+        Journal* journal = nullptr;
+        // NOTE: there was a regionFallback member here (NA/EU failover). It was
+        // removed: a fallback copy cannot be validated at the fetch layer (Data
+        // artifacts carry no MD5, and the other region's authentic size lives
+        // only in that region's manifest), so it could accept an unverified
+        // substitute for a genuinely region-specific archive. See the comment
+        // on the PlainUrl download in reconstruct().
 };
 
 /// Replace the first occurrence of substring `from` in url with `to`. If
@@ -75,10 +88,6 @@ std::string swap_base(const std::string& url, const std::string& from,
 /// url with toSeg (e.g. "/NA/" or "/EU/"), preserving the build segment.
 /// Returns url unchanged if no region code is found.
 std::string swap_region(const std::string& url, const std::string& toSeg);
-
-/// Region segments to try if the primary region fails: "EU" yields {"/NA/"},
-/// "NA" yields {"/EU/"}, else empty.
-std::vector<std::string> region_fallbacks(const std::string& region);
 
 /// Return the CDN region path segment for the given region:
 ///   "NA" -> "/NA/"
@@ -92,6 +101,23 @@ std::string region_segment(const std::string& region);
 /// are effectively no-ops.
 void apply_region_to_recipe(Recipe& run, const Recipe& base,
                             const std::string& region);
+
+/// Every resumable download target this recipe could leave in outDir: the
+/// "<dst>.part" scratch reconstruct() resumes for each artifact, the
+/// "<dst>.part.fb" left by the removed cross-region failover in an earlier
+/// release, and the root-level source archives (zip / MPQ basenames), which
+/// download_file also resumes in place. Used by discard_stale_run() so cleanup
+/// touches only files this tool created, never unrelated ones that happen to
+/// end in .part.
+std::vector<std::string> artifact_part_paths(const Recipe& r,
+                                             const std::string& outDir);
+
+/// Digest of a recipe's download identity: an md5 over every MPQ/zip source
+/// (url, size) and every artifact (outName, size, url, md5). Two runs with the
+/// same recipe_id fetch the same bytes to the same names, so a resume between
+/// them is sound; any change of version, region, mode, locale selection or
+/// cinematics changes the digest. Stored in RunStamp::recipeId.
+std::string recipe_id(const Recipe& r);
 
 /// Reconstruct every artifact of recipe r into outDir, verifying each file by
 /// size (when known) and MD5 (when set). Fails fast (throws) on any download,

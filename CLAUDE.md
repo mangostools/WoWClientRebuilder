@@ -39,11 +39,16 @@ build/install trees are **siblings** of the source dir (see the `windows-vcpkg` 
 cmake --preset windows-vcpkg
 cmake --build --preset windows-vcpkg
 cmake --install ..\WoWClientRebuilder_build --config Release   # -> ..\WoWClientRebuilder_install
+# Tests are OPT-IN: use the windows-vcpkg-tests preset (sets WCR_BUILD_TESTS=ON):
+cmake --preset windows-vcpkg-tests
+cmake --build --preset windows-vcpkg-tests
 ctest --test-dir ..\WoWClientRebuilder_build -C Release        # offline doctest suite
 ```
 
-- **CI must stay green.** AppVeyor builds the `windows-vcpkg` preset (Release) and runs `ctest`; the offline
-  unit suite must pass on a checkout with **no** Blizzard data present.
+- **CI must stay green.** AppVeyor must build the `windows-vcpkg-tests` preset (Release) and run `ctest`;
+  the offline unit suite must pass on a checkout with **no** Blizzard data present. The plain
+  `windows-vcpkg` preset registers NO tests — a `ctest` against it is an empty run that proves nothing,
+  so CI on that preset is silent loss of all coverage.
 - The **live 4.3.4 acceptance** test hits the real CDN and is registered only with `-DWCR_LIVE_TESTS=ON`
   (auto-sets `WCR_LIVE=1`); the **5.4.8 byte-exact** tests are fixture-gated and skip without local MPQs. A
   default `ctest` runs neither — never make the default suite depend on network or Blizzard fixtures.

@@ -31,20 +31,87 @@
 #pragma once
 #include <set>
 #include <string>
+#include <vector>
 
 namespace wcr
 {
+/// Identity of the run that produced a journal. A resume is only sound when
+/// the new run would fetch the SAME bytes from the SAME place under the SAME
+/// checks. Every input that changes any of those belongs here.
+///
+/// Region matters because same-named archives genuinely differ between CDN
+/// regions (MoP's Updates/wow-0-18414-Win-final.MPQ is 21729424 in EU and
+/// 21729944 in NA). Resuming an interrupted EU download under --region NA would
+/// append NA bytes at the EU partial's offset and land on exactly the NA
+/// expected size, so the size check -- the only check a Data artifact has --
+/// would accept a file spliced from two regions.
+///
+/// `recipeId` (see recipe_id in fetch.h) digests the assembled run recipe's
+/// full download identity -- every artifact name, size and URL plus the MPQ and
+/// zip sources -- so it also encodes mode, locale selection, cinematics and
+/// version. That closes stale-partial laundering: a matching stamp implies the
+/// IDENTICAL artifact set, and every stamp write is preceded by a discard that
+/// enumerated that set's partials, so any .part present under a matching stamp
+/// was produced by an equivalent run.
+///
+/// `torrentId` identifies WHICH torrent verified the pieces, not merely that
+/// one was supplied: a journal entry means it "passed ALL integrity checks",
+/// so two different --tfil files must not stamp alike, or entries written
+/// under one set of piece hashes would let a run with different hashes skip
+/// those files. Empty means no piece verification was in force.
+struct RunStamp
+{
+    std::string region;    ///< Selected CDN region ("EU"/"NA").
+    std::string manifest;  ///< Partial-manifest name the sizes came from.
+    std::string recipeId;  ///< Digest of the assembled recipe (recipe_id).
+    std::string torrentId; ///< Identity of the .tfil, or "" for none.
+
+    bool operator==(const RunStamp& o) const
+    {
+        return region == o.region && manifest == o.manifest &&
+               recipeId == o.recipeId && torrentId == o.torrentId;
+    }
+};
+
 /// On-disk resume ledger. Each line of the journal file is one relPath that
 /// has passed ALL integrity checks. The file lives at outDir/.wcr-journal.
 struct Journal
 {
     std::string path;           ///< Full path to the .wcr-journal file.
     std::set<std::string> done; ///< Set of relPaths already completed.
+    RunStamp stamp;             ///< Identity of the run that owns these lines.
+    bool stamped = false;       ///< Whether the file carried a stamp at all.
 };
 
 /// Load the journal at outDir/.wcr-journal. A missing file yields an empty,
 /// ready-to-use Journal whose path still points at where it will be written.
 Journal load_journal(const std::string& outDir);
+
+/// True only when j was written by a run matching `want` and may therefore be
+/// resumed. Pure predicate, no side effects: deciding is separate from
+/// discarding so the caller can confirm with the user before destroying
+/// anything. Fail-closed -- an unstamped journal (written before stamps
+/// existed, or hand-made) has unestablishable provenance and never matches,
+/// and neither does a journal missing any stamp field.
+bool journal_matches(const Journal& j, const RunStamp& want);
+
+/// Write j's stamp to a fresh journal file, replacing any existing one and
+/// creating the parent directory if needed (on a first run into a new output
+/// directory the stamp is written before anything else exists there). Call
+/// once the run is committed, BEFORE the first download: otherwise an
+/// interruption during the very first artifact leaves partials on disk with
+/// no journal to identify which run produced them, and the next run --
+/// seeing no journal -- would treat them as its own and resume them.
+void write_stamp(Journal& j);
+
+/// Remove the journal and the given partial-download paths, so nothing from
+/// a previous run can be resumed into or mistaken for this one. `partPaths`
+/// must be exactly the paths THIS run would resume (see artifact_part_paths):
+/// a blind sweep by suffix would also delete unrelated files that happen to
+/// end in .part. Throws if anything could not be removed -- proceeding after
+/// a failed cleanup would resume the very bytes this call exists to destroy.
+void discard_stale_run(const std::string& outDir,
+                       const std::vector<std::string>& partPaths);
 
 /// Return true if relPath is already recorded as done in journal j.
 bool is_done(const Journal& j, const std::string& relPath);

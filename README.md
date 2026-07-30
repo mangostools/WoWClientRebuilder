@@ -20,7 +20,9 @@ the pre-CASC "pod-retail" builds Blizzard still serves.
   out of the already-downloaded MPQs — no redistribution.
 - **All MoP locales** (15 at last check, read live from the manifest) via an interactive
   picker, or `--locale enUS,deDE` / `all`.
-- **CDN region** selection (EU / NA) with automatic cross-region failover.
+- **CDN region** selection (EU / NA). No silent cross-region substitution:
+  some archives genuinely differ between regions, so a failed download is
+  reported for retry rather than replaced with the other region's copy.
 - **Two ways to run** — an interactive menu when launched with no arguments
   (double-click), or a scriptable flag interface.
 - **Verified end to end** — the partial download manifest is first authenticated against
@@ -164,8 +166,17 @@ cases, and every produced file is MD5-verified.
 
 ## Running tests
 
+The test suite is opt-in: use the `windows-vcpkg-tests` preset (or pass
+`-DWCR_BUILD_TESTS=ON` to any configure). A plain `windows-vcpkg` configure
+builds only the tool and registers no tests, so a `ctest` against it is an
+empty run — CI must use the tests preset.
+
 ```powershell
-ctest --test-dir WoWClientRebuilder_build -C Release
+# From the source directory (the preset's build tree is the sibling
+# ..\WoWClientRebuilder_build):
+cmake --preset windows-vcpkg-tests
+cmake --build --preset windows-vcpkg-tests
+ctest --test-dir ..\WoWClientRebuilder_build -C Release
 ```
 
 The doctest suite (100+ cases across 21 `tests/test_*.cpp` files) runs fully offline.
@@ -183,10 +194,11 @@ Two network/fixture-gated acceptance groups sit alongside it:
   of reporting a green "0 assertions"), so a default offline `ctest` never sees it.
 
 ```powershell
-# Register + run the live 4.3.4 acceptance:
-cmake --preset windows-vcpkg -DWCR_LIVE_TESTS=ON
-cmake --build --preset windows-vcpkg
-ctest --test-dir WoWClientRebuilder_build -C Release -R acceptance_cata434
+# Register + run the live 4.3.4 acceptance (needs the test suite ON too:
+# WCR_LIVE_TESTS lives inside the WCR_BUILD_TESTS gate):
+cmake --preset windows-vcpkg-tests -DWCR_LIVE_TESTS=ON
+cmake --build --preset windows-vcpkg-tests
+ctest --test-dir ..\WoWClientRebuilder_build -C Release -R acceptance_cata434
 ```
 
 ## Localhost safety guard

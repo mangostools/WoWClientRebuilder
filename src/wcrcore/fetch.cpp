@@ -87,19 +87,6 @@ std::string swap_region(const std::string& url, const std::string& toSeg)
     return url;
 }
 
-std::vector<std::string> region_fallbacks(const std::string& region)
-{
-    if (region == "EU")
-    {
-        return {"/NA/"};
-    }
-    if (region == "NA")
-    {
-        return {"/EU/"};
-    }
-    return {};
-}
-
 std::string region_segment(const std::string& region)
 {
     return (region == "NA") ? "/NA/" : "/EU/";
@@ -143,15 +130,69 @@ void verify_or_throw(const Bytes& data, const std::string& expectedMd5,
     }
 }
 
+std::vector<std::string> artifact_part_paths(const Recipe& r,
+                                             const std::string& outDir)
+{
+    // Mirrors the `part = dst + ".part"` naming used by reconstruct() below;
+    // the .fb sibling is legacy scratch from the removed region failover. The
+    // root-level source archives are included too: download_file resumes them
+    // in place, so a stale one from an incompatible run must not survive
+    // either (MoP's final update MPQ genuinely differs per region).
+    std::vector<std::string> out;
+    out.reserve(r.artifacts.size() * 2 + r.mpqs.size() + r.zips.size());
+    for (const Artifact& a : r.artifacts)
+    {
+        const std::string dst = outDir + "/" + a.outName;
+        out.push_back(dst + ".part");
+        out.push_back(dst + ".part.fb");
+    }
+    for (const MpqSource& m : r.mpqs)
+    {
+        out.push_back(outDir + "/" +
+                      m.url.substr(m.url.find_last_of('/') + 1));
+    }
+    for (const ZipSource& z : r.zips)
+    {
+        out.push_back(outDir + "/" +
+                      z.url.substr(z.url.find_last_of('/') + 1));
+    }
+    return out;
+}
+
+std::string recipe_id(const Recipe& r)
+{
+    // Field separators keep adjacent values from colliding ("a"+"bc" vs
+    // "ab"+"c"). Sizes participate so a manifest revision that changes only a
+    // byte count still changes the digest.
+    std::string ident;
+    for (const MpqSource& m : r.mpqs)
+    {
+        ident += "M|" + m.url + "|" + std::to_string(m.size) + "\n";
+    }
+    for (const ZipSource& z : r.zips)
+    {
+        ident += "Z|" + z.url + "\n";
+    }
+    for (const Artifact& a : r.artifacts)
+    {
+        ident += "A|" + a.outName + "|" + std::to_string(a.size) + "|" +
+                 a.url + "|" + a.md5 + "\n";
+    }
+    return md5_hex(Bytes(ident.begin(), ident.end()));
+}
+
 void remove_build_scratch(const std::string& outDir,
                           const std::vector<std::string>& sourceFiles)
 {
+    // Never the journal here: this also runs from reconstruct()'s failure
+    // path, where the journal and the .part files must survive so the next
+    // run can prove the partials are its own and resume them. The journal is
+    // removed explicitly on the full-success path only.
     std::error_code ec;
     for (const std::string& f : sourceFiles)
     {
         std::filesystem::remove(outDir + "/" + f, ec);
     }
-    std::filesystem::remove(outDir + "/.wcr-journal", ec);
 }
 
 namespace
@@ -181,6 +222,17 @@ void reconstruct(const Recipe& r, const std::string& outDir,
     std::map<std::string, std::unique_ptr<MpqArchive>> mpqCache;
     int reportSizeChecked = 0;
     long long reportTotalBytes = 0;
+
+    // A journal may authorise skips and .part resumption ONLY when its stamp
+    // provably describes THIS reconstruction. Region/manifest/torrent are the
+    // orchestrator's to check (journal_matches), but the recipe digest can and
+    // must be verified right here: a stamped journal from different work
+    // handed in by a library caller would otherwise authorise correct-size
+    // skips, and its partials would be resumed with this recipe's bytes.
+    // Untrusted => nothing is skipped and every download starts from byte 0,
+    // overwriting any stale .part instead of appending to it.
+    const bool journalTrusted = opts.journal && opts.journal->stamped &&
+                                opts.journal->stamp.recipeId == recipe_id(r);
 
     try
     {
@@ -289,10 +341,14 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                 std::filesystem::create_directories(
                     std::filesystem::path(dst).parent_path());
                 DownloadOpts popts;
-                popts.resume = true;
+                // Resume only partials this run can prove are its own (see
+                // journalTrusted above); resume=false opens "wb" and
+                // overwrites, so a foreign .part never receives appended
+                // bytes.
+                popts.resume = journalTrusted;
                 popts.expected_size = a.size;
                 popts.progress_label = a.outName;
-                if (opts.journal && is_done(*opts.journal, a.outName))
+                if (journalTrusted && is_done(*opts.journal, a.outName))
                 {
                     // Only skip if the destination file is actually on disk.
                     // When a size is known, also confirm the file size matches
@@ -315,63 +371,30 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                     }
                     // File missing or wrong size — fall through and re-download.
                 }
+                // NOTE: there is deliberately no cross-region failover here.
+                // Substituting the other region's copy cannot be validated at
+                // this layer: Data artifacts carry no MD5, the fallback's
+                // authentic size lives only in that region's manifest, and
+                // several archives genuinely differ per region (MoP's
+                // Updates/wow-0-18414-Win-final.MPQ). A fallback that happened
+                // to match the selected region's expected length would be
+                // accepted without anything establishing byte-identity, so a
+                // pod outage now surfaces as a clean failure the user can
+                // retry rather than as a possibly-wrong client.
                 try
                 {
                     download_file(a.url, part, popts);
                 }
                 catch (const std::exception&)
                 {
-                    bool recovered = false;
-                    for (const std::string& fb : opts.regionFallback)
+                    if (a.optional)
                     {
-                        // A region switch must never resume the selected
-                        // region's partial bytes: the same-named archive can
-                        // differ between regions (MoP's
-                        // Updates/wow-0-18414-Win-final.MPQ), Data artifacts
-                        // carry no MD5, and a file spliced from two regions
-                        // would still pass the size check if the lengths happen
-                        // to agree. So each fallback downloads whole into its
-                        // OWN part file, and the primary's part is only
-                        // discarded once a fallback has completed. That keeps
-                        // an interrupted primary download resumable on a later
-                        // run instead of throwing its progress away.
-                        std::string fbPart = part + ".fb";
-                        std::error_code fbec;
-                        std::filesystem::remove(fbPart, fbec);
-                        DownloadOpts fopts = popts;
-                        fopts.resume = false;
-                        try
-                        {
-                            download_file(swap_region(a.url, fb), fbPart,
-                                          fopts);
-                            std::filesystem::remove(part, fbec);
-                            std::filesystem::rename(fbPart, part);
-                            recovered = true;
-                            break;
-                        }
-                        catch (const std::exception&)
-                        {
-                            // Try the next fallback region, again from scratch.
-                            // Note fopts.expected_size is still the SELECTED
-                            // region's size, so a fallback whose archive is
-                            // region-specific fails this size check rather than
-                            // yielding an unvalidated file: the fallback's
-                            // authentic size is only known from that region's
-                            // manifest, which this layer does not have.
-                            std::filesystem::remove(fbPart, fbec);
-                        }
+                        std::error_code rec;
+                        std::filesystem::remove(part, rec);
+                        skipped = true;
+                        break;
                     }
-                    if (!recovered)
-                    {
-                        if (a.optional)
-                        {
-                            std::error_code rec;
-                            std::filesystem::remove(part, rec);
-                            skipped = true;
-                            break;
-                        }
-                        throw;
-                    }
+                    throw;
                 }
                 // Only load bytes into RAM when an MD5 must be verified.
                 // Data files carry no MD5, so multi-GB files stay on disk and
@@ -396,7 +419,11 @@ void reconstruct(const Recipe& r, const std::string& outDir,
                         throw;
                     }
                 }
-                if (opts.journal && !skipped)
+                // Trusted journals only, for WRITES as much as reads: a
+                // foreign journal must never gain completion lines from this
+                // recipe, or a later run matching the FOREIGN stamp would
+                // skip a same-sized file this recipe produced.
+                if (journalTrusted && !skipped)
                 {
                     markPending = true;
                 }
@@ -464,7 +491,7 @@ void reconstruct(const Recipe& r, const std::string& outDir,
         printf("  %-28s %lld bytes  [%s]\n", a.outName.c_str(), actualSize,
                a.md5.c_str());
         reportTotalBytes += actualSize;
-        if (markPending && opts.journal)
+        if (markPending && journalTrusted)
         {
             mark_done(*opts.journal, a.outName);
         }
@@ -489,11 +516,17 @@ void reconstruct(const Recipe& r, const std::string& outDir,
     // This is only reached after the artifact loop completes, i.e. on FULL
     // success — any failed/interrupted artifact throws earlier and never gets
     // here, so the journal has nothing left to resume and is safe to remove.
+    // (The journal is removed HERE and only here; the failure path keeps it so
+    // the next run can resume its partials.)
     // Close the MPQ handles FIRST: while an MpqArchive is open, StormLib keeps
     // the source .MPQ open and Windows refuses to delete an open file (the
     // remove fails silently via error_code), stranding the scratch in the root.
     mpqCache.clear();
     remove_build_scratch(outDir, mpqSourceFiles);
+    {
+        std::error_code jec;
+        std::filesystem::remove(outDir + "/.wcr-journal", jec);
+    }
 
     int reportPieceVerified = (opts.torrent != nullptr) ? reportSizeChecked : 0;
     printf("\n=== Reconstruction complete ===\n");

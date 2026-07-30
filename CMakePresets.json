@@ -20,6 +20,15 @@
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
       }
+    },
+    {
+      "name": "windows-vcpkg-tests",
+      "displayName": "Windows x64 (vcpkg, tests ON)",
+      "description": "windows-vcpkg plus the opt-in unit-test suite. CI MUST use this preset (or pass -DWCR_BUILD_TESTS=ON) or its ctest run is an empty no-op that proves nothing.",
+      "inherits": "windows-vcpkg",
+      "cacheVariables": {
+        "WCR_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -27,6 +36,12 @@
       "name": "windows-vcpkg",
       "displayName": "Release (windows-vcpkg)",
       "configurePreset": "windows-vcpkg",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-vcpkg-tests",
+      "displayName": "Release (windows-vcpkg, tests ON)",
+      "configurePreset": "windows-vcpkg-tests",
       "configuration": "Release"
     }
   ]
