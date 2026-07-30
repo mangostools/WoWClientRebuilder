@@ -315,111 +315,18 @@ std::string get_bytes(const std::filesystem::path& p)
 }
 
 wcr::RunStamp stamp_of(const std::string& region, const std::string& manifest,
-                       bool pieces)
+                       const std::string& torrentId)
 {
     wcr::RunStamp s;
     s.region = region;
     s.manifest = manifest;
-    s.pieces = pieces;
+    s.torrentId = torrentId;
     return s;
 }
 } // namespace
 
-TEST_CASE("run_stamp_round_trips_and_resumes_an_equivalent_run")
-{
-    namespace fs = std::filesystem;
-    fs::path dir = fs::temp_directory_path() / "wcr_stamp_rt";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
 
-    const wcr::RunStamp want = stamp_of("NA", "wow-18414-NA.mfil", false);
-    wcr::Journal j = wcr::load_journal(dir.string(), want);
-    CHECK(j.done.empty());
-    wcr::mark_done(j, "Data/a.MPQ");
-    wcr::mark_done(j, "Data/b.MPQ");
 
-    // Same run identity -> the journal is honoured.
-    wcr::Journal again = wcr::load_journal(dir.string(), want);
-    CHECK(again.stamped);
-    CHECK(again.stamp == want);
-    CHECK(again.done.size() == 2);
-    CHECK(wcr::is_done(again, "Data/a.MPQ"));
-
-    fs::remove_all(dir);
-}
-
-TEST_CASE("run_stamp_mismatch_discards_the_journal_and_stale_partials")
-{
-    // The core of the cross-run splice: an interrupted run under one region
-    // leaves a .part, and resuming the same output dir under another region
-    // would append the new region's bytes at the old offset. The totals then
-    // match the new region's expected size, and a Data artifact has no MD5 to
-    // catch it. So a changed region must discard both journal and partials.
-    namespace fs = std::filesystem;
-    fs::path dir = fs::temp_directory_path() / "wcr_stamp_mismatch";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
-
-    wcr::Journal eu = wcr::load_journal(
-        dir.string(), stamp_of("EU", "wow-18414-EU.mfil", false));
-    wcr::mark_done(eu, "Data/a.MPQ");
-    put_bytes(dir / "Data" / "big.MPQ.part", "EUPARTIAL");
-    put_bytes(dir / "Data" / "old.MPQ.part.fb", "SCRATCH");
-    put_bytes(dir / "Data" / "keep.MPQ", "FINISHED");
-
-    SUBCASE("region change")
-    {
-        wcr::Journal na = wcr::load_journal(
-            dir.string(), stamp_of("NA", "wow-18414-NA.mfil", false));
-        CHECK(na.done.empty());
-        CHECK(na.stamp.region == "NA");
-        CHECK_FALSE(wcr::journal_exists(dir.string()));
-        CHECK_FALSE(fs::exists(dir / "Data" / "big.MPQ.part"));
-        CHECK_FALSE(fs::exists(dir / "Data" / "old.MPQ.part.fb"));
-        // Completed output is NOT collateral damage.
-        CHECK(get_bytes(dir / "Data" / "keep.MPQ") == "FINISHED");
-    }
-
-    SUBCASE("manifest change at the same region")
-    {
-        wcr::Journal other = wcr::load_journal(
-            dir.string(), stamp_of("EU", "wow-15595-EU.mfil", false));
-        CHECK(other.done.empty());
-        CHECK_FALSE(fs::exists(dir / "Data" / "big.MPQ.part"));
-    }
-
-    SUBCASE("adding --tfil invalidates entries written without piece checks")
-    {
-        // A journal line means "passed ALL integrity checks", but the EU run
-        // above ran none of the piece checks, so its entries must not let a
-        // torrent-verified run skip those files.
-        wcr::Journal withPieces = wcr::load_journal(
-            dir.string(), stamp_of("EU", "wow-18414-EU.mfil", true));
-        CHECK(withPieces.done.empty());
-        CHECK(withPieces.stamp.pieces);
-    }
-
-    fs::remove_all(dir);
-}
-
-TEST_CASE("run_stamp_absent_is_fail_closed")
-{
-    // A journal from a build that predates stamping has unknown provenance:
-    // it could have been written under any region. It must not be resumed.
-    namespace fs = std::filesystem;
-    fs::path dir = fs::temp_directory_path() / "wcr_stamp_legacy";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
-    put_bytes(dir / ".wcr-journal", "Data/a.MPQ\nData/b.MPQ\n");
-    put_bytes(dir / "Data" / "a.MPQ.part", "STALE");
-
-    wcr::Journal j = wcr::load_journal(
-        dir.string(), stamp_of("NA", "wow-18414-NA.mfil", false));
-    CHECK(j.done.empty());
-    CHECK_FALSE(fs::exists(dir / "Data" / "a.MPQ.part"));
-
-    fs::remove_all(dir);
-}
 
 TEST_CASE("no_cross_region_failover_on_a_missing_primary")
 {
@@ -455,13 +362,179 @@ TEST_CASE("no_cross_region_failover_on_a_missing_primary")
     fs::remove_all(root);
 }
 
+
+TEST_CASE("write_stamp_then_matches_and_round_trips")
+{
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_stamp_rt";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    const wcr::RunStamp want = stamp_of("NA", "wow-18414-NA.mfil", "");
+    wcr::Journal j;
+    j.path = (dir / ".wcr-journal").string();
+    j.stamp = want;
+    wcr::write_stamp(j);
+    // The stamp is on disk BEFORE any artifact completes: an interruption right
+    // now still leaves a journal identifying the run that owns the partials.
+    wcr::Journal empty = wcr::load_journal(dir.string());
+    CHECK(empty.stamped);
+    CHECK(wcr::journal_matches(empty, want));
+    CHECK(empty.done.empty());
+
+    wcr::mark_done(j, "Data/a.MPQ");
+    wcr::mark_done(j, "Data/b.MPQ");
+    wcr::Journal again = wcr::load_journal(dir.string());
+    CHECK(wcr::journal_matches(again, want));
+    CHECK(again.done.size() == 2);
+    CHECK(wcr::is_done(again, "Data/a.MPQ"));
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("journal_matches_is_fail_closed")
+{
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_stamp_match";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const wcr::RunStamp na = stamp_of("NA", "wow-18414-NA.mfil", "");
+
+    SUBCASE("matching stamp resumes")
+    {
+        wcr::Journal j;
+        j.path = (dir / ".wcr-journal").string();
+        j.stamp = na;
+        wcr::write_stamp(j);
+        CHECK(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+    SUBCASE("region change does not")
+    {
+        wcr::Journal j;
+        j.path = (dir / ".wcr-journal").string();
+        j.stamp = stamp_of("EU", "wow-18414-EU.mfil", "");
+        wcr::write_stamp(j);
+        CHECK_FALSE(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+    SUBCASE("same region, different manifest (or version) does not")
+    {
+        wcr::Journal j;
+        j.path = (dir / ".wcr-journal").string();
+        j.stamp = stamp_of("NA", "wow-15595-NA.mfil", "");
+        wcr::write_stamp(j);
+        CHECK_FALSE(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+    SUBCASE("different torrent identity does not")
+    {
+        // torrentId names WHICH .tfil verified the pieces. Entries completed
+        // under torrent A must not be skipped by a run using torrent B, and a
+        // no-torrent journal must not satisfy a --tfil run.
+        wcr::Journal j;
+        j.path = (dir / ".wcr-journal").string();
+        j.stamp = stamp_of("NA", "wow-18414-NA.mfil", "AAAA");
+        wcr::write_stamp(j);
+        CHECK_FALSE(wcr::journal_matches(
+            wcr::load_journal(dir.string()),
+            stamp_of("NA", "wow-18414-NA.mfil", "BBBB")));
+        CHECK_FALSE(wcr::journal_matches(
+            wcr::load_journal(dir.string()),
+            stamp_of("NA", "wow-18414-NA.mfil", "")));
+    }
+    SUBCASE("unstamped journal (pre-stamp build) never matches")
+    {
+        put_bytes(dir / ".wcr-journal", "Data/a.MPQ\n");
+        CHECK_FALSE(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+    SUBCASE("partial stamp header never matches")
+    {
+        put_bytes(dir / ".wcr-journal", "#wcr region=NA\nData/a.MPQ\n");
+        CHECK_FALSE(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+    SUBCASE("missing journal never matches")
+    {
+        CHECK_FALSE(wcr::journal_matches(wcr::load_journal(dir.string()), na));
+    }
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("discard_stale_run_removes_exactly_the_named_paths")
+{
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_discard";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    put_bytes(dir / ".wcr-journal", "#wcr region=EU\nData/a.MPQ\n");
+    put_bytes(dir / "Data" / "a.MPQ.part", "EUPART");
+    put_bytes(dir / "Data" / "b.MPQ.part.fb", "SCRATCH");
+    // NOT in the recipe: a user file that merely ends in .part, and finished
+    // output. Neither may be touched.
+    put_bytes(dir / "notes.part", "USERDATA");
+    put_bytes(dir / "Data" / "keep.MPQ", "FINISHED");
+
+    std::vector<std::string> parts = {
+        (dir / "Data" / "a.MPQ.part").string(),
+        (dir / "Data" / "a.MPQ.part.fb").string(), // absent: must be a no-op
+        (dir / "Data" / "b.MPQ.part").string(),    // absent: must be a no-op
+        (dir / "Data" / "b.MPQ.part.fb").string(),
+    };
+    CHECK_NOTHROW(wcr::discard_stale_run(dir.string(), parts));
+
+    CHECK_FALSE(fs::exists(dir / ".wcr-journal"));
+    CHECK_FALSE(fs::exists(dir / "Data" / "a.MPQ.part"));
+    CHECK_FALSE(fs::exists(dir / "Data" / "b.MPQ.part.fb"));
+    CHECK(get_bytes(dir / "notes.part") == "USERDATA");
+    CHECK(get_bytes(dir / "Data" / "keep.MPQ") == "FINISHED");
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("discard_stale_run_throws_when_a_partial_survives")
+{
+    // Proceeding after a failed cleanup would resume the very bytes the
+    // discard exists to destroy, so it must fail loudly, not press on.
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "wcr_discard_fail";
+    fs::remove_all(dir);
+    // A directory at the .part path makes remove() fail (non-empty dir).
+    fs::create_directories(dir / "Data" / "a.MPQ.part" / "pin");
+    put_bytes(dir / "Data" / "a.MPQ.part" / "pin" / "x", "PIN");
+
+    std::vector<std::string> parts = {(dir / "Data" / "a.MPQ.part").string()};
+    CHECK_THROWS_AS(wcr::discard_stale_run(dir.string(), parts),
+                    std::runtime_error);
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("artifact_part_paths_mirrors_reconstruct_naming")
+{
+    wcr::Recipe r;
+    wcr::Artifact a;
+    a.outName = "Data/x.bin";
+    r.artifacts.push_back(a);
+    wcr::Artifact b;
+    b.outName = "Updates/y.MPQ";
+    r.artifacts.push_back(b);
+
+    std::vector<std::string> got = wcr::artifact_part_paths(r, "out");
+    REQUIRE(got.size() == 4);
+    CHECK(got[0] == "out/Data/x.bin.part");
+    CHECK(got[1] == "out/Data/x.bin.part.fb");
+    CHECK(got[2] == "out/Updates/y.MPQ.part");
+    CHECK(got[3] == "out/Updates/y.MPQ.part.fb");
+}
+
 TEST_CASE("cross_run_region_change_cannot_splice_a_partial")
 {
-    // End-to-end form of the cross-run splice, through reconstruct(). The two
-    // regions serve SAME-LENGTH, different-content files, so the size check --
-    // the only check a Data artifact gets -- cannot tell a spliced result
-    // from a clean one. A resumed EU partial would yield "EUEU" + the NA
-    // remainder at exactly the expected length and be accepted.
+    // End-to-end form of the cross-run splice through reconstruct(), with
+    // same-length regional content so only the content assertion can tell a
+    // spliced result from a clean one. Covers BOTH prior-run shapes:
+    // - a stamped journal from an interrupted run, and
+    // - partials with NO journal at all (interrupted before the first artifact
+    //   completed under a pre-stamp build, or after clear_journal) -- the case
+    //   a lazily-written stamp cannot see, closed by discarding whenever the
+    //   journal does not affirmatively match.
     namespace fs = std::filesystem;
     fs::path root = fs::temp_directory_path() / "wcr_crossrun_splice";
     fs::remove_all(root);
@@ -471,14 +544,6 @@ TEST_CASE("cross_run_region_change_cannot_splice_a_partial")
     put_bytes(pod / "EU" / "15050.direct" / "Data" / "x.bin", "EUEUEUEU");
     put_bytes(pod / "NA" / "15050.direct" / "Data" / "x.bin", "NANANANA");
 
-    // State left by an interrupted EU run: a stamped journal and a 4-byte
-    // partial holding EU bytes.
-    const wcr::RunStamp euStamp = stamp_of("EU", "wow-15595-EU.mfil", false);
-    wcr::Journal euRun = wcr::load_journal(out.string(), euStamp);
-    wcr::mark_done(euRun, "Data/other.bin");
-    put_bytes(out / "Data" / "x.bin.part", "EUEU");
-
-    // Now the user re-runs the SAME output dir with --region NA.
     wcr::Recipe r;
     r.version = "4.3.4";
     r.build = "15595";
@@ -490,14 +555,36 @@ TEST_CASE("cross_run_region_change_cannot_splice_a_partial")
     a.size = 8;
     r.artifacts.push_back(a);
 
-    const wcr::RunStamp naStamp = stamp_of("NA", "wow-15595-NA.mfil", false);
-    wcr::Journal naRun = wcr::load_journal(out.string(), naStamp);
-    // The stale EU partial is gone before a single byte is fetched.
+    const wcr::RunStamp naStamp = stamp_of("NA", "wow-15595-NA.mfil", "");
+
+    SUBCASE("stale stamped journal from an EU run")
+    {
+        wcr::Journal eu;
+        eu.path = (out / ".wcr-journal").string();
+        eu.stamp = stamp_of("EU", "wow-15595-EU.mfil", "");
+        wcr::write_stamp(eu);
+        wcr::mark_done(eu, "Data/other.bin");
+        put_bytes(out / "Data" / "x.bin.part", "EUEU");
+    }
+    SUBCASE("orphan partial with no journal at all")
+    {
+        put_bytes(out / "Data" / "x.bin.part", "EUEU");
+    }
+
+    // The CLI flow: read, decide, and -- since nothing affirmatively matches --
+    // discard this recipe's partials and stamp the new run before fetching.
+    wcr::Journal j = wcr::load_journal(out.string());
+    CHECK_FALSE(wcr::journal_matches(j, naStamp));
+    wcr::discard_stale_run(out.string(),
+                           wcr::artifact_part_paths(r, out.string()));
+    j = wcr::Journal{};
+    j.path = (out / ".wcr-journal").string();
+    j.stamp = naStamp;
+    wcr::write_stamp(j);
     CHECK_FALSE(fs::exists(out / "Data" / "x.bin.part"));
-    CHECK(naRun.done.empty());
 
     wcr::ReconstructOpts opts;
-    opts.journal = &naRun;
+    opts.journal = &j;
     REQUIRE_NOTHROW(reconstruct(r, out.string(), opts));
 
     // Whole NA content. "EUEUNANA" is the splice this guards against: it is

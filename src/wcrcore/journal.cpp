@@ -30,6 +30,8 @@
 #include "journal.h"
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
+#include <vector>
 
 namespace wcr
 {
@@ -63,9 +65,9 @@ void apply_stamp_line(const std::string& line, RunStamp& s, bool& sawAny)
         s.manifest = val;
         sawAny = true;
     }
-    else if (key == "pieces")
+    else if (key == "torrent")
     {
-        s.pieces = (val == "1");
+        s.torrentId = val;
         sawAny = true;
     }
 }
@@ -103,57 +105,64 @@ Journal load_journal(const std::string& outDir)
     return j;
 }
 
-Journal load_journal(const std::string& outDir, const RunStamp& want)
+bool journal_matches(const Journal& j, const RunStamp& want)
 {
-    Journal j = load_journal(outDir);
-    // An unstamped journal predates stamping (or was hand-made): its provenance
-    // cannot be established, so it is discarded rather than trusted.
-    if (j.done.empty() && !j.stamped)
+    // A journal with no stamp, or a stamp missing any field, cannot be shown to
+    // describe this run: refuse it rather than guess.
+    if (!j.stamped || j.stamp.region.empty() || j.stamp.manifest.empty())
     {
-        j.stamp = want;
-        return j;
+        return false;
     }
-    if (j.stamped && j.stamp == want)
-    {
-        return j;
-    }
-    discard_stale_run(outDir);
-    Journal fresh;
-    fresh.path = j.path;
-    fresh.stamp = want;
-    return fresh;
+    return j.stamp == want;
 }
 
-void discard_stale_run(const std::string& outDir)
+void write_stamp(Journal& j)
 {
+    std::ofstream out(j.path, std::ios::binary | std::ios::trunc);
+    if (!out)
+    {
+        throw std::runtime_error("cannot write resume journal " + j.path);
+    }
+    out << kStampPrefix << "region=" << j.stamp.region << "\n"
+        << kStampPrefix << "manifest=" << j.stamp.manifest << "\n"
+        << kStampPrefix << "torrent=" << j.stamp.torrentId << "\n";
+    out.flush();
+    if (!out)
+    {
+        throw std::runtime_error("cannot write resume journal " + j.path);
+    }
+    j.stamped = true;
+}
+
+void discard_stale_run(const std::string& outDir,
+                       const std::vector<std::string>& partPaths)
+{
+    // Only ever the paths this run itself would resume. A recursive sweep by
+    // ".part" suffix would also delete unrelated files in a reused output dir.
+    std::vector<std::string> failed;
     std::error_code ec;
     std::filesystem::remove(outDir + "/.wcr-journal", ec);
-    // Sweep partials so the next run cannot resume into bytes fetched under a
-    // different region/manifest. Iterate non-throwing: the output dir is a
-    // user-typed path and may be unreadable in places.
-    std::filesystem::recursive_directory_iterator it(
-        outDir, std::filesystem::directory_options::skip_permission_denied, ec);
     if (ec)
     {
-        return;
+        failed.push_back(outDir + "/.wcr-journal");
     }
-    std::filesystem::recursive_directory_iterator end;
-    for (; it != end; it.increment(ec))
+    for (const std::string& p : partPaths)
     {
-        if (ec)
+        std::error_code rm;
+        std::filesystem::remove(p, rm);
+        if (rm)
         {
-            return;
+            failed.push_back(p);
         }
-        const std::string p = it->path().string();
-        const bool isPart = p.size() >= 5 && p.compare(p.size() - 5, 5,
-                                                       ".part") == 0;
-        const bool isFb = p.size() >= 8 && p.compare(p.size() - 8, 8,
-                                                     ".part.fb") == 0;
-        if (isPart || isFb)
-        {
-            std::error_code rm;
-            std::filesystem::remove(it->path(), rm);
-        }
+    }
+    if (!failed.empty())
+    {
+        // Carrying on would resume exactly the bytes this call exists to
+        // destroy, so fail loudly instead.
+        throw std::runtime_error(
+            "cannot discard stale download state (" +
+            std::to_string(failed.size()) + " file(s), first: " + failed[0] +
+            "); remove it by hand or choose a different output directory");
     }
 }
 
@@ -166,19 +175,10 @@ void mark_done(Journal& j, const std::string& relPath)
 {
     if (j.done.insert(relPath).second)
     {
-        // Write the stamp header the first time the file is created, so every
-        // journal on disk identifies the run that owns it.
-        std::error_code ec;
-        const bool fresh = !std::filesystem::exists(j.path, ec);
+        // The stamp header is written up front by write_stamp(), not lazily
+        // here: a journal must identify its run from the moment the first byte
+        // is fetched, not from the moment the first artifact completes.
         std::ofstream out(j.path, std::ios::binary | std::ios::app);
-        if (fresh && !j.stamp.region.empty())
-        {
-            out << kStampPrefix << "region=" << j.stamp.region << "\n"
-                << kStampPrefix << "manifest=" << j.stamp.manifest << "\n"
-                << kStampPrefix << "pieces=" << (j.stamp.pieces ? "1" : "0")
-                << "\n";
-            j.stamped = true;
-        }
         out << relPath << "\n";
     }
 }

@@ -130,6 +130,22 @@ void verify_or_throw(const Bytes& data, const std::string& expectedMd5,
     }
 }
 
+std::vector<std::string> artifact_part_paths(const Recipe& r,
+                                             const std::string& outDir)
+{
+    // Mirrors the `part = dst + ".part"` naming used by reconstruct() below;
+    // the .fb sibling is legacy scratch from the removed region failover.
+    std::vector<std::string> out;
+    out.reserve(r.artifacts.size() * 2);
+    for (const Artifact& a : r.artifacts)
+    {
+        const std::string dst = outDir + "/" + a.outName;
+        out.push_back(dst + ".part");
+        out.push_back(dst + ".part.fb");
+    }
+    return out;
+}
+
 void remove_build_scratch(const std::string& outDir,
                           const std::vector<std::string>& sourceFiles)
 {

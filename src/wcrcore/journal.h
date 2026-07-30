@@ -31,6 +31,7 @@
 #pragma once
 #include <set>
 #include <string>
+#include <vector>
 
 namespace wcr
 {
@@ -45,19 +46,21 @@ namespace wcr
 /// expected size, so the size check -- the only check a Data artifact has --
 /// would accept a file spliced from two regions.
 ///
-/// `pieces` records whether the run had a torrent: a journal entry means it
-/// "passed ALL integrity checks", but a run without --tfil never ran piece
-/// verification, so its entries must not let a --tfil run skip those files.
+/// `torrentId` identifies WHICH torrent verified the pieces, not merely that
+/// one was supplied: a journal entry means it "passed ALL integrity checks",
+/// so two different --tfil files must not stamp alike, or entries written
+/// under one set of piece hashes would let a run with different hashes skip
+/// those files. Empty means no piece verification was in force.
 struct RunStamp
 {
-    std::string region;   ///< Selected CDN region ("EU"/"NA").
-    std::string manifest; ///< Partial-manifest name the sizes came from.
-    bool pieces = false;  ///< Whether piece verification was in force.
+    std::string region;    ///< Selected CDN region ("EU"/"NA").
+    std::string manifest;  ///< Partial-manifest name the sizes came from.
+    std::string torrentId; ///< Identity of the .tfil, or "" for none.
 
     bool operator==(const RunStamp& o) const
     {
         return region == o.region && manifest == o.manifest &&
-               pieces == o.pieces;
+               torrentId == o.torrentId;
     }
 };
 
@@ -75,17 +78,29 @@ struct Journal
 /// ready-to-use Journal whose path still points at where it will be written.
 Journal load_journal(const std::string& outDir);
 
-/// Load the journal only if it belongs to a run matching `want`. When the
-/// on-disk stamp differs -- or is absent, as in a journal written before stamps
-/// existed, whose provenance cannot be established -- the stale run is
-/// discarded via discard_stale_run() and an empty journal carrying `want` is
-/// returned. Fail-closed: an unrecognised journal is never resumed.
-Journal load_journal(const std::string& outDir, const RunStamp& want);
+/// True only when j was written by a run matching `want` and may therefore be
+/// resumed. Pure predicate, no side effects: deciding is separate from
+/// discarding so the caller can confirm with the user before destroying
+/// anything. Fail-closed -- an unstamped journal (written before stamps
+/// existed, or hand-made) has unestablishable provenance and never matches,
+/// and neither does a journal missing any stamp field.
+bool journal_matches(const Journal& j, const RunStamp& want);
 
-/// Remove the journal and every stale partial download (*.part, and the
-/// *.part.fb scratch left by the removed region-failover code) under outDir, so
-/// nothing from the previous run can be resumed into or mistaken for this one.
-void discard_stale_run(const std::string& outDir);
+/// Write j's stamp to a fresh journal file, replacing any existing one. Call
+/// once the run is committed, BEFORE the first download: otherwise an
+/// interruption during the very first artifact leaves partials on disk with
+/// no journal to identify which run produced them, and the next run --
+/// seeing no journal -- would treat them as its own and resume them.
+void write_stamp(Journal& j);
+
+/// Remove the journal and the given partial-download paths, so nothing from
+/// a previous run can be resumed into or mistaken for this one. `partPaths`
+/// must be exactly the paths THIS run would resume (see artifact_part_paths):
+/// a blind sweep by suffix would also delete unrelated files that happen to
+/// end in .part. Throws if anything could not be removed -- proceeding after
+/// a failed cleanup would resume the very bytes this call exists to destroy.
+void discard_stale_run(const std::string& outDir,
+                       const std::vector<std::string>& partPaths);
 
 /// Return true if relPath is already recorded as done in journal j.
 bool is_done(const Journal& j, const std::string& relPath);

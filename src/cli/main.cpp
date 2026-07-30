@@ -35,6 +35,7 @@
 #include "recipe.h"
 #include "fetch.h"
 #include "journal.h"
+#include "md5.h"
 #include "bytes.h"
 #include "wtf.h"
 #include "bencode.h"
@@ -103,14 +104,21 @@ static Recipe build_run_recipe(const RunParams& params)
 
 /// Identify this run for the resume journal: the region and the
 /// partial-manifest name the artifact sizes come from, plus whether piece
-/// verification is in force. Recomputed from the recipe (no network); the
+/// torrent is in force. Recomputed from the recipe (no network); the
 /// manifest name also distinguishes versions, so a 4.3.4 and a 5.4.8 run in one
 /// output directory never resume each other.
-static wcr::RunStamp run_stamp(const RunParams& params, bool haveTorrent)
+static wcr::RunStamp run_stamp(const RunParams& params,
+                              const std::string& tfilPath)
 {
     wcr::RunStamp s;
     s.region = params.region;
-    s.pieces = haveTorrent;
+    // WHICH torrent, not merely whether one was given: two different .tfil
+    // files carry different piece hashes, so entries completed under one must
+    // not be skipped by a run using the other.
+    if (!tfilPath.empty())
+    {
+        s.torrentId = wcr::md5_hex(wcr::read_file(tfilPath));
+    }
     if (const Recipe* base = find_recipe(params.version))
     {
         const std::string ptr =
@@ -142,6 +150,7 @@ int main(int argc, char** argv)
 
     const bool interactive = (argc == 1);
     RunParams params;
+    bool forceFresh = false;
     if (interactive)
     {
         // Production locale source: fetch the partial manifest and read its
@@ -182,13 +191,12 @@ int main(int argc, char** argv)
         // Resume: a previous journal auto-resumes (already-downloaded files are
         // skipped) UNLESS the user explicitly asks to start fresh. The
         // destructive clear requires an explicit yes, so EOF/Enter keep it.
-        if (wcr::should_clear_journal(std::cin, std::cout,
-                                      wcr::journal_exists(params.outDir),
-                                      params.outDir,
-                                      wcr::clear_screen_and_print_banner))
-        {
-            wcr::clear_journal(params.outDir);
-        }
+        // Only RECORD the answer here -- nothing is deleted until the run is
+        // confirmed below, so backing out at the pre-flight prompt cannot cost
+        // the user a partial download.
+        forceFresh = wcr::should_clear_journal(
+            std::cin, std::cout, wcr::journal_exists(params.outDir),
+            params.outDir, wcr::clear_screen_and_print_banner);
     }
     else
     {
@@ -218,12 +226,15 @@ int main(int argc, char** argv)
         {
             opts.torrent = &torrent;
         }
-        // Resume only a journal written by an equivalent run. A region or
-        // manifest change means the same relPaths can name different bytes, and
-        // adding --tfil means checks the old run never ran, so in those cases
-        // the stale journal and its partials are discarded instead of resumed.
-        wcr::Journal journal =
-            wcr::load_journal(params.outDir, run_stamp(params, haveTorrent));
+        // Decide whether the previous run may be resumed, but do not act on it
+        // yet: a region or manifest change means the same relPaths can name
+        // different bytes, and a different --tfil means different piece hashes.
+        // Reading is separate from discarding so nothing is destroyed
+        // before the user has confirmed the run.
+        const wcr::RunStamp want = run_stamp(params, params.tfilPath);
+        wcr::Journal journal = wcr::load_journal(params.outDir);
+        const bool resumable =
+            !forceFresh && wcr::journal_matches(journal, want);
         opts.journal = &journal;
         long long total = wcr::total_bytes(run.artifacts);
         long long avail = wcr::free_space(params.outDir);
@@ -248,6 +259,23 @@ int main(int argc, char** argv)
             if (interactive)
             {
                 wcr::clear_screen_and_print_banner(std::cout);
+            }
+            if (!resumable)
+            {
+                // Destroy the previous run's state and stamp this one
+                // BEFORE the first download. Partials left by an earlier
+                // region are swept
+                // even when no journal survives to describe them --
+                // otherwise an interruption during the very first artifact
+                // would leave unattributable bytes for the next run to
+                // resume.
+                wcr::discard_stale_run(
+                    params.outDir,
+                    wcr::artifact_part_paths(run, params.outDir));
+                journal = wcr::Journal{};
+                journal.path = params.outDir + "/.wcr-journal";
+                journal.stamp = want;
+                wcr::write_stamp(journal);
             }
             reconstruct(run, params.outDir, opts);
             if (params.mode == Mode::FullClient)

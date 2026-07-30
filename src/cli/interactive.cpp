@@ -265,7 +265,7 @@ Nav prompt_region(std::istream& in, std::ostream& out, bool allowBack,
 {
     int idx = 0;
     Nav nav = prompt_menu(in, out,
-                          "CDN region (the other stays automatic failover):",
+                          "CDN region to download from:",
                           {"EU", "NA"}, allowBack, idx);
     if (nav != Nav::Select)
     {

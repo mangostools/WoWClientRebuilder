@@ -20,7 +20,9 @@ the pre-CASC "pod-retail" builds Blizzard still serves.
   out of the already-downloaded MPQs — no redistribution.
 - **All MoP locales** (15 at last check, read live from the manifest) via an interactive
   picker, or `--locale enUS,deDE` / `all`.
-- **CDN region** selection (EU / NA) with automatic cross-region failover.
+- **CDN region** selection (EU / NA). No silent cross-region substitution:
+  some archives genuinely differ between regions, so a failed download is
+  reported for retry rather than replaced with the other region's copy.
 - **Two ways to run** — an interactive menu when launched with no arguments
   (double-click), or a scriptable flag interface.
 - **Verified end to end** — the partial download manifest is first authenticated against

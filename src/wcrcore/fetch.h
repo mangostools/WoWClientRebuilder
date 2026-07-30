@@ -94,6 +94,15 @@ std::string region_segment(const std::string& region);
 void apply_region_to_recipe(Recipe& run, const Recipe& base,
                             const std::string& region);
 
+/// Every partial-download path this recipe could leave in outDir: the
+/// "<dst>.part" scratch reconstruct() resumes for each artifact, plus the
+/// "<dst>.part.fb" left by the removed cross-region failover in an earlier
+/// release. Used by
+/// discard_stale_run() so cleanup touches only files this tool created, never
+/// unrelated ones that happen to end in .part.
+std::vector<std::string> artifact_part_paths(const Recipe& r,
+                                             const std::string& outDir);
+
 /// Reconstruct every artifact of recipe r into outDir, verifying each file by
 /// size (when known) and MD5 (when set). Fails fast (throws) on any download,
 /// extraction, or verification error; no partial output is left behind
